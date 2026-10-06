@@ -2,7 +2,7 @@
  * REVISION - SKU Database wins (warehouse-aware) + field-level warehouse fallback in Finance Data
  *
  * Replace these functions in Code.gs by name (everything else stays as it is):
- *   - CONFIG                      : add the one line shown below
+ *   - skuDbWarehouseCol (new)     : tiny helper, no CONFIG edit needed
  *   - loadSkuMappingDatabase      : now a thin loader around buildSkuLookup()
  *   - buildSkuLookup (new)        : pure builder, keeps the Warehouse column of the database
  *   - pickSkuDbStores (new)       : picks the stores that apply to the pivot row's warehouse
@@ -19,8 +19,16 @@
  *   could not be told apart.
  */
 
-// ---- CONFIG: add next to SKU_DB_COL_OFFICIAL_STORE / SKU_DB_COL_SKU ----------------------------------------
-//   SKU_DB_COL_WAREHOUSE: 1,           // B - Warehouse (blank = applies to every warehouse)
+// No CONFIG change is needed: the database's Warehouse column (B) is read through skuDbWarehouseCol() below.
+// (If you ever want another column, add SKU_DB_COL_WAREHOUSE to CONFIG and it takes precedence.)
+
+
+/**
+ * Column index (0-based) of the Warehouse column in the SKU database sheet. Defaults to 1 (column B).
+ */
+function skuDbWarehouseCol() {
+  return CONFIG.SKU_DB_COL_WAREHOUSE === undefined ? 1 : CONFIG.SKU_DB_COL_WAREHOUSE;
+}
 
 
 /**
@@ -44,7 +52,7 @@ function loadSkuMappingDatabase() {
     throw new Error('SKU Mapping Brand database has no data (only headers)');
   }
 
-  const numCols = Math.max(CONFIG.SKU_DB_COL_OFFICIAL_STORE, CONFIG.SKU_DB_COL_WAREHOUSE, CONFIG.SKU_DB_COL_SKU) + 1;
+  const numCols = Math.max(CONFIG.SKU_DB_COL_OFFICIAL_STORE, skuDbWarehouseCol(), CONFIG.SKU_DB_COL_SKU) + 1;
   const values = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
   console.log(`SKU Mapping Brand database has ${values.length} data rows`);
 
@@ -95,7 +103,7 @@ function buildSkuLookup(values) {
     const row = values[i];
     const store = String(row[CONFIG.SKU_DB_COL_OFFICIAL_STORE] || '').trim();
     const sku = normalizeSku(row[CONFIG.SKU_DB_COL_SKU]);
-    const warehouse = normKey(row[CONFIG.SKU_DB_COL_WAREHOUSE]);
+    const warehouse = normKey(row[skuDbWarehouseCol()]);
 
     if (!sku || !store) {
       skippedRows++;
