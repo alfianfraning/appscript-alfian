@@ -1,10 +1,10 @@
 /**
- * FSOP direct export — builds the "Export to Sheets" payload on the server, without the dashboard UI, and writes the spreadsheet.
+ * FSOP direct export - builds the "Export to Sheets" payload on the server, without the dashboard UI, and writes the spreadsheet.
  *
  * Input : the dashboard cache ({ DATA: [...brand x month rows...], MP_DATA, ... }) and the name of a store or a
  *         virtual group ("LOreal Group", "LOreal CPD", "Maybelline Official", ...).
  * Output: { storeLabel, sheets: [ { sheetName, columnHeaders, prefixRows, rowLabels, rowFormats, rowIsBold,
- *           values, rowHighlights, columnGroups, rowGroups, freezeRows } ] } — exactly the shape Code.gs's
+ *           values, rowHighlights, columnGroups, rowGroups, freezeRows } ] } - exactly the shape Code.gs's
  *         createExportSpreadsheet(payload) / writeExportSheet_ already consume.
  *
  * The payload builder (everything above the "Apps Script side" banner) is pure JavaScript and was verified in Node against
@@ -512,7 +512,7 @@ function fsopBuildTab_(ctx, dim, sheetName) {
   const grid = {};
   const put = (r, c, v) => { grid[r + ',' + c] = v; };
 
-  // per period, per entity (in E order) metrics — used by the entity sub-rows
+  // per period, per entity (in E order) metrics - used by the entity sub-rows
   const entByPeriod = periods.map(p => E.map(n => fsopPeriodMetrics_(dim, ctx, p, n).metrics));
   const colOf = {};
   cols.forEach(c => { colOf[c.pi + '|' + (c.entity === null ? '' : c.entity)] = c; });
@@ -607,7 +607,7 @@ function fsopBuildTab_(ctx, dim, sheetName) {
 
 /**
  * Columns that are compared with each other in one row: the month columns of one calendar quarter, the Quarter
- * columns of one half, the Half columns of one year, and — separately — the entity columns of one period
+ * columns of one half, the Half columns of one year, and - separately - the entity columns of one period
  * (never the Grand Total period). Entity columns of a breakdown sub-row are not compared at all (they hold one
  * diagonal value). The highest value is highlighted `highest`, the lowest `lowest`; ties highlight every tied
  * column; a group with fewer than two numeric cells, or all-equal cells, highlights nothing.
@@ -898,12 +898,12 @@ function fsopCreateSpreadsheet_(payload) {
 function exportFsop(selection, opts) {
   opts = opts || {};
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30 * 1000)) throw new Error('Another export / refresh is still running — try again in a few minutes.');
+  if (!lock.tryLock(30 * 1000)) throw new Error('Another export / refresh is still running - try again in a few minutes.');
   try {
     let cache = opts.cache || null;
     if (!cache && opts.refresh !== false) cache = refreshData();
     if (!cache) { const json = loadCachedData_(); cache = json ? JSON.parse(json) : null; }
-    if (!cache || !cache.DATA || !cache.DATA.length) throw new Error('No dashboard data available — run refreshData() first.');
+    if (!cache || !cache.DATA || !cache.DATA.length) throw new Error('No dashboard data available - run refreshData() first.');
     return fsopExportFromCache_(cache, selection);
   } finally {
     lock.releaseLock();
@@ -915,7 +915,7 @@ function fsopExportFromCache_(cache, selection) {
   const known = Object.keys(FSOP_VIRTUAL_GROUPS).concat(Array.from(new Set((cache.DATA || []).filter(r => !r.isVirtual).map(r => r.brand))));
   if (known.indexOf(selection) === -1) throw new Error('Unknown store / group "' + selection + '". Valid: ' + known.join(', '));
   const result = fsopCreateSpreadsheet_(fsopBuildPayload_(cache, selection));
-  Logger.log('FSOP export "%s" → %s (%s)', selection, result.fileName, result.url);
+  Logger.log('FSOP export "%s" -> %s (%s)', selection, result.fileName, result.url);
   return result;
 }
 
@@ -928,12 +928,12 @@ function fsopGetSelections_() {
 
 /**
  * Entry point for the editor's Run button and for the daily trigger: refreshData() once, then one spreadsheet per
- * configured selection (all built from that same fresh payload — no second read of the source files).
+ * configured selection (all built from that same fresh payload - no second read of the source files).
  */
 function exportFsopFromSettings() {
   const selections = fsopGetSelections_();
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30 * 1000)) throw new Error('Another export / refresh is still running — try again in a few minutes.');
+  if (!lock.tryLock(30 * 1000)) throw new Error('Another export / refresh is still running - try again in a few minutes.');
   try {
     const cache = refreshData();
     if (!cache || !cache.DATA || !cache.DATA.length) throw new Error('refreshData() returned no data.');
@@ -950,7 +950,7 @@ function exportFsopLOrealGroup() { return exportFsop('LOreal Group'); }
 
 /**
  * Run once: daily 06:00 trigger that runs exportFsopFromSettings (refresh + export in a single run). It REPLACES the
- * existing refreshData trigger, because exportFsopFromSettings already calls refreshData() first — keeping both would
+ * existing refreshData trigger, because exportFsopFromSettings already calls refreshData() first - keeping both would
  * read all the source files twice a day.
  */
 function installFsopDailyTrigger() {
