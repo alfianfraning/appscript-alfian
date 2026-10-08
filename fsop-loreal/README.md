@@ -1,25 +1,23 @@
-# FSOP Overview — export Google Sheets langsung (tanpa UI dashboard)
+# FSOP Overview - export Google Sheets langsung (tanpa UI dashboard)
 
 `Export.gs` ditambahkan sebagai **file baru** di project Apps Script FS Overview LOreal Group (di samping `Code.gs` dan `Dashboard.html`). Tidak ada file lama yang diubah.
 
 ## Cara kerja
-`exportFsopFromSettings()` → `refreshData()` → payload cache yang baru dipakai langsung → membangun 3 tab (`Per Period per Store`, `Per Period per Warehouse`, `Per Period per Marketplace`) → file `"<tahun> - FSOP - <label> Version N"` di `EXPORT_FOLDER_ID` (penamaan & versi sama dengan `createExportSpreadsheet`).
+`Export.gs` tidak menulis ulang logika export. Ia memuat script `Dashboard.html` di server (DOM di-stub), memilih store/group seperti mencentang kotaknya di sidebar, lalu memanggil `getExportRows_()` + `buildExportPayload_()` + `exportStoreLabel_()` milik dashboard sendiri, dan mengirim hasilnya ke `createExportSpreadsheet(payload)` di `Code.gs` tanpa diubah. Jadi isi export, nama file, nomor versi, folder, dan format selalu mengikuti `Dashboard.html` dan `Code.gs`.
+
+Alur: `refreshData()` -> payload cache terbaru -> engine dashboard -> `createExportSpreadsheet`.
 
 ## Pemakaian
 | Fungsi | Kegunaan |
 |---|---|
 | `exportFsopLOrealGroup()` | Run manual dari editor: refresh + export "LOreal Group" |
-| `exportFsop('LOreal CPD')` | Store / group mana pun; opsi kedua `{refresh:false}` untuk melewati refreshData |
+| `exportFsop('LOreal CPD')` | Store / group mana pun (nama persis seperti di sidebar); opsi kedua `{refresh:false}` melewati refreshData |
 | `exportFsopFromSettings()` | Refresh sekali, lalu export semua nama di Script Property `FSOP_SELECTIONS` (pisah koma / baris baru; default `LOreal Group`) |
-| `installFsopDailyTrigger()` | Pasang trigger harian 06:00 yang **menggantikan** trigger `refreshData` (karena sudah dipanggil di dalamnya) |
+| `installFsopDailyTrigger()` | Trigger harian 06:00 yang **menggantikan** trigger `refreshData` (sudah dipanggil di dalamnya) |
 | `removeFsopDailyTrigger()` | Kembalikan trigger `refreshData` biasa |
 
-## Verifikasi
-Dibandingkan sel-demi-sel dengan "2026 - FSOP - LOreal Group Version 13" (rumus, nilai, format angka, bold, warna highlight, freeze, grup baris/kolom), dengan fungsi writer asli dari `Code.gs` dan stub Apps Script:
-- Tab Store & Warehouse: 0 selisih.
-- Tab Marketplace: 5 sel highlight pada baris *Consumables per order* yang berbeda (nilai antar-marketplace identik hingga ~1e-13, sehingga penentu tertinggi/terendah hanya noise pembulatan).
+## Ketergantungan pada Dashboard.html
+Script data dikenali dari blok `<script>` yang memuat `const FS_PAYLOAD = <?!= dataJson ?>` dan berakhir tepat sebelum baris `function render() {`. Harus ada: `DATA`, `state`, `getExportRows_`, `buildExportPayload_`, `exportStoreLabel_`. Kalau salah satu berubah nama/hilang, export berhenti dengan pesan error yang jelas (tidak diam-diam salah).
 
-## Asumsi yang belum bisa dibuktikan (hanya ada 1 contoh export)
-- Daftar `FSOP_VIRTUAL_GROUPS` disalin dari definisi grup LOreal; samakan bila `Dashboard.html` berubah.
-- Untuk **store tunggal** tab "per Store" dilewati (tidak ada pecahan anggota); untuk **group** yang dipecah adalah anggota langsung group tsb.
-- Highlight antar Quarter dikelompokkan per semester, antar Half per tahun (contoh hanya memuat H1).
+## Verifikasi
+Dengan `Dashboard.html` live dan cache nyata, dibandingkan sel demi sel dengan "2026 - FSOP - LOreal Group Version 13" memakai fungsi writer asli dari `Code.gs` (stub Apps Script): 0 selisih di 3 tab (rumus, nilai, format, bold, warna highlight, freeze, grup baris/kolom). Semua 19 store/group menghasilkan payload tanpa error.
