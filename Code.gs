@@ -57,6 +57,20 @@
  *    are tried against the Reconciliation Mapping, so re-running also picks up newly added Master rows)
  *    (rerunFromUnmappedSkuFill), with the CBM reconciliation controls re-checked.
  *
+ * 10. Menu "Re-run Raw Data SCM & Finance Data (after DB Audit correction)" (rerunFromDbAuditFill): the "DB Audit" sheet has a
+ *    column H "CORRECT STORE (to fill in and re run)" next to each listed row. Type the correct Official Store or
+ *    Standardized_Brand there and run the menu. Per typed name (resolveCorrectedStore):
+ *      - a Master store for that Warehouse Name + WH Partner      -> used as is
+ *      - a Store Alias name                                       -> used as is
+ *      - a Master Standardized_Brand (or one matching by name)    -> the brand's single Master store of that warehouse
+ *        when its Finance fields really give that brand, otherwise the typed name stays the Official Store and Finance
+ *        Data takes Brand / Mapping Brand from the Master brand (WHP / Subsidiary from the warehouse)
+ *      - anything else                                            -> stays Unmapped and is listed in the completion alert
+ *    The row's Mapping Source becomes "Manual (DB Audit)". Typed values are copied into the rebuilt DB Audit sheet, so
+ *    they survive further re-runs. Both re-run menus also give a database store that the Master does not know its
+ *    Brand BY NAME (CONFIG.AUTO_BRAND_NAME_MATCH), but only where the warehouse holds several brands in the Master
+ *    (Finance Data would otherwise stay Unmapped); every name matched this way is listed in the completion alert.
+ *
  * Output file name = <source file name> + " - Mapping Output"
  * e.g. "202607 CBM Daily - 31072026" -> "202607 CBM Daily - 31072026 - Mapping Output"
  *
@@ -102,6 +116,15 @@ const CONFIG = {
   UNMAPPED_SKU_SHEET_NAME: 'Unmapped SKU',
   DB_AUDIT_SHEET_NAME: 'DB Audit',
   DB_AUDIT_MAX_ROWS: 5000,           // max mismatch rows listed in the DB Audit sheet
+  // Column H of the DB Audit list is filled in by hand with the correct store; the "re-run after DB Audit correction"
+  // menu reads it. Located by header text first (so inserting columns later does not break it), column H as fallback.
+  DB_AUDIT_HEADER_ROW: 9,
+  DB_AUDIT_CORRECT_HEADER: 'CORRECT STORE (to fill in and re run)',
+  DB_AUDIT_CORRECT_COL: 8,           // H (1-based)
+  // At every re-run, a database store that the Master does not know and that no Store Alias / Reconciliation Mapping
+  // resolves gets its Standardized_Brand from the Master by NAME (e.g. "Maybelline Official" -> brand "Maybelline",
+  // looked up first among the brands of the same warehouse). false = only the Store Alias tab / Reconciliation Mapping.
+  AUTO_BRAND_NAME_MATCH: true,
   RAW_DATA_SHEET_NAME: 'Raw Data SCM',
   FINANCE_DATA_SHEET_NAME: 'Finance Data',
   BREAKDOWN_SHEET_NAME: 'Breakdown',
@@ -157,6 +180,7 @@ const CONFIG = {
   SOURCE_OFFICIAL_STORE: 'Source Official Store (AC)',
   SOURCE_RECONCILIATION: 'Reconciliation Mapping',
   SOURCE_MANUAL: 'Manual (Unmapped SKU sheet)',
+  SOURCE_MANUAL_AUDIT: 'Manual (DB Audit)',
   SOURCE_UNMAPPED: 'Unmapped',
 
   // Column order of the WH Partner columns in the "Breakdown" sheet (per "Urutan Kolom.xlsx").
@@ -993,6 +1017,116 @@ function resolveViaReconciliation(sourceOfficialStore, warehouseName, whPartner,
 }
 
 
+// Words ignored when a store name is compared with a Standardized_Brand ("Maybelline Official" ~ "Maybelline").
+const BRAND_NAME_STOPWORDS = ['official', 'store', 'shop', 'flagship', 'indonesia', 'the'];
+
+
+/**
+ * Comparable word list of a store / brand name: lower-case, apostrophes removed ("L'Oreal" = "LOreal"),
+ * punctuation turned into spaces, stop words dropped.
+ */
+function brandTokens(value) {
+  return normKey(value).replace(/['’`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(' ')
+    .filter(t => t && BRAND_NAME_STOPWORDS.indexOf(t) === -1);
+}
+
+
+/**
+ * Find the Master Standardized_Brand a store NAME refers to (without looking at the Master's Official Store column):
+ *   3 = same words ("Garnier Official" ~ "Garnier"), 2 = the brand's words are all in the name ("Garnier Men Official"
+ *   ~ "Garnier Men", the longest brand wins), 1 = the name's words are all in the brand ("LOreal Haircare" ~
+ *   "LOreal Paris Haircare").
+ * The brands present in the row's own warehouse are tried first; only if none matches, every brand of the Master.
+ * Returns the brandInfo entry { brand, mappingBrands }, or null when nothing matches or the best match is ambiguous.
+ */
+function matchBrandByName(name, wKey, masterMapping) {
+  const nameTokens = brandTokens(name);
+  if (nameTokens.length === 0 || !masterMapping.brandInfo) return null;
+
+  const pick = brandKeys => {
+    let best = null; // { score, size, keys: Set }
+    for (const key of brandKeys) {
+      const info = masterMapping.brandInfo.get(key);
+      if (!info) continue;
+      const bt = brandTokens(info.brand);
+      if (bt.length === 0) continue;
+      const inName = bt.every(t => nameTokens.indexOf(t) !== -1);
+      const nameInBrand = nameTokens.every(t => bt.indexOf(t) !== -1);
+      let score = 0;
+      if (inName && nameInBrand) score = 3;
+      else if (inName) score = 2;
+      else if (nameInBrand) score = 1;
+      if (score === 0) continue;
+      const size = bt.length;
+      if (!best || score > best.score || (score === best.score && score === 2 && size > best.size)) {
+        best = { score: score, size: size, keys: new Set([key]) };
+      } else if (score === best.score && (score !== 2 || size === best.size)) {
+        best.keys.add(key);
+      }
+    }
+    if (!best || best.keys.size !== 1) return null;
+    return masterMapping.brandInfo.get(Array.from(best.keys)[0]);
+  };
+
+  const inWarehouse = masterMapping.warehouseBrands ? masterMapping.warehouseBrands.get(wKey) : null;
+  return (inWarehouse ? pick(inWarehouse) : null) || pick(masterMapping.brandInfo.keys());
+}
+
+
+/**
+ * What a store name typed into the "CORRECT STORE" column of DB Audit (or a database store the Master does not
+ * know) means for the Raw Data SCM row and for Finance Data. First match wins:
+ *   1. the Master has this store for the row's Warehouse Name + WH Partner             -> used as is
+ *   2. the Store Alias tab has it                                                      -> used as is (Brand via Store Alias)
+ *   3. it equals a Master Standardized_Brand (or, by name, matches one: matchBrandByName):
+ *        - the brand has exactly ONE Master store at this warehouse and that store's Finance fields really give this
+ *          brand -> that Master store becomes the Official Store (unless keepStore: the store name is not replaced)
+ *        - otherwise the typed name stays the Official Store and gets a store alias {Brand, Mapping Brand} derived
+ *          from the Master, plus a Master "key" store of the warehouse for WHP / Subsidiary
+ *   4. nothing matches                                                                 -> unresolved (Finance stays Unmapped)
+ * Returns { officialStore, masterStore, alias, resolved, remarks, how }; alias is a store-alias entry to add to the
+ * working Store Alias map (or null).
+ */
+function resolveCorrectedStore(typed, warehouseName, whPartner, masterMapping, storeAlias, keepStore) {
+  const name = String(typed || '').trim();
+  const result = (extra) => Object.assign({ officialStore: name, masterStore: '', alias: null, resolved: true, remarks: '', how: '' }, extra);
+
+  if (Object.prototype.hasOwnProperty.call(masterMapping.compositeLookup, compositeKey(name, warehouseName, whPartner))) {
+    return result({ how: 'master' });
+  }
+  const aliasEntry = storeAlias ? storeAlias.get(normKey(name)) : null;
+  if (aliasEntry && (aliasEntry.standardizedBrand || aliasEntry.standardizedMappingBrand)) {
+    return result({ how: 'alias', remarks: 'Brand via Store Alias' });
+  }
+
+  const wKey = warehouseKey(warehouseName, whPartner);
+  let info = masterMapping.brandInfo ? masterMapping.brandInfo.get(normKey(name)) : null;
+  let how = 'brand';
+  if (!info) {
+    info = matchBrandByName(name, wKey, masterMapping);
+    how = 'name';
+  }
+  if (!info) {
+    return result({ resolved: false, how: 'none', remarks: `"${name}" is not a Master store, Standardized_Brand or Store Alias name` });
+  }
+
+  const stores = masterMapping.brandLookup.get(`${normKey(info.brand)}|${wKey}`) || [];
+  if (how === 'brand' && stores.length === 1 && !keepStore) {
+    const fields = masterMapping.compositeLookup[compositeKey(stores[0], warehouseName, whPartner)];
+    if (fields && normKey(fields.standardizedBrand) === normKey(info.brand)) {
+      return result({ officialStore: stores[0], how: 'brand-store', remarks: `Corrected via DB Audit: brand "${info.brand}" -> Master store "${stores[0]}"` });
+    }
+  }
+  const mappingBrands = Array.from(info.mappingBrands.values());
+  return result({
+    masterStore: stores.length > 0 ? stores[0] : '',
+    alias: { store: name, standardizedBrand: info.brand, standardizedMappingBrand: mappingBrands.length === 1 ? mappingBrands[0] : '' },
+    how: how === 'name' ? 'name' : 'brand',
+    remarks: how === 'name' ? `Brand matched by name: ${info.brand}` : `Brand via Master brand: ${info.brand}`
+  });
+}
+
+
 /**
  * Load the optional "Store Alias" tab of the Master Data file (see buildStoreAlias).
  * A missing tab only produces a warning (Brand / Mapping Brand then come from the other fallbacks).
@@ -1077,6 +1211,8 @@ function loadMasterMappingData() {
  *                                   composite key is missing, so e.g. WHP and Subsidiary (warehouse-level
  *                                   facts) are still filled even if the Official Store is not in the Master.
  * brandLookup / brandNames : used by the Reconciliation Mapping step.
+ * brandInfo / warehouseBrands : Standardized_Brand -> its Mapping Brand(s), and the brands present per warehouse
+ *                   (used to resolve a corrected / unknown store name to a Standardized_Brand, see resolveCorrectedStore).
  */
 function buildMasterMapping(values) {
   const FIELDS = ['standardizedBrand', 'standardizedMappingBrand', 'standardizedWHP', 'standardizedSubsidiary'];
@@ -1085,7 +1221,9 @@ function buildMasterMapping(values) {
     compositeLookup: {},
     warehouseLookup: new Map(),
     brandLookup: new Map(),
-    brandNames: new Set()
+    brandNames: new Set(),
+    brandInfo: new Map(),        // normKey(brand) -> { brand, mappingBrands: Map(normKey -> value) }
+    warehouseBrands: new Map()   // warehouseKey -> Set of normKey(brand) present in that warehouse
   };
   const warehouseTuples = new Map();  // warehouseKey -> Set of standardized tuples seen
   const warehouseFields = new Map();  // warehouseKey -> { field -> Map(normKey -> value) } (non-blank values only)
@@ -1143,6 +1281,15 @@ function buildMasterMapping(values) {
       const bStores = mapping.brandLookup.get(bKey) || [];
       if (officialStore && bStores.findIndex(s => normKey(s) === normKey(officialStore)) === -1) bStores.push(officialStore);
       mapping.brandLookup.set(bKey, bStores);
+
+      let info = mapping.brandInfo.get(normKey(raw.standardizedBrand));
+      if (!info) {
+        info = { brand: raw.standardizedBrand, mappingBrands: new Map() };
+        mapping.brandInfo.set(normKey(raw.standardizedBrand), info);
+      }
+      if (raw.standardizedMappingBrand) info.mappingBrands.set(normKey(raw.standardizedMappingBrand), raw.standardizedMappingBrand);
+      if (!mapping.warehouseBrands.has(wKey)) mapping.warehouseBrands.set(wKey, new Set());
+      mapping.warehouseBrands.get(wKey).add(normKey(raw.standardizedBrand));
     }
   }
 
@@ -1559,6 +1706,7 @@ function buildDbAudit(rows, skuLookup, storeAlias) {
 
   const reasonFor = (row, picked) => {
     if (row.mappingSource === CONFIG.SOURCE_MANUAL) return 'Manual override (Unmapped SKU sheet)';
+    if (row.mappingSource === CONFIG.SOURCE_MANUAL_AUDIT) return 'Manual correction (DB Audit column H)';
     if (picked.stores.length > 1) return 'Database lists several stores for this SKU / warehouse and none could be chosen';
     return `Official Store came from "${row.mappingSource}" instead of the database store`;
   };
@@ -1620,6 +1768,14 @@ function buildDbAudit(rows, skuLookup, storeAlias) {
 
 
 /**
+ * Key of a DB Audit / Unmapped SKU fill-in: SKU (normalized) | Warehouse Name | WH Partner.
+ */
+function auditFillKey(sku, warehouseName, whPartner) {
+  return `${normalizeSku(sku)}|${String(warehouseName).trim()}|${String(whPartner).trim()}`;
+}
+
+
+/**
  * Text lines for the completion alert / log.
  */
 function describeDbAudit(summary) {
@@ -1636,13 +1792,16 @@ function describeDbAudit(summary) {
  * Create the "DB Audit" sheet (generated right after "Unmapped SKU").
  *
  * Left: summary (A1:C6) and the list of rows whose Official Store differs from the database (from row 9,
- * largest CBM first, at most CONFIG.DB_AUDIT_MAX_ROWS rows).
- * Right (column K): the database store names the Master does not know, with CBM, whether the Store Alias tab has
- * them and how many rows Finance Data could resolve; these are the names to add to the Store Alias tab / Master.
+ * largest CBM first, at most CONFIG.DB_AUDIT_MAX_ROWS rows). Column H ("CORRECT STORE (to fill in and re run)") is
+ * filled in by hand with the correct store (a Master Official Store or Standardized_Brand name) and applied by the
+ * menu "Re-run ... (after DB Audit correction)". `corrections` (Map "SKU|Warehouse|Partner" -> typed store, as read
+ * from the previous DB Audit sheet) is written back into column H so a rebuild never loses what was typed.
+ * Right (column L; K is a spacer): the database store names the Master does not know, with CBM, whether the Store
+ * Alias tab has them and how many rows Finance Data could resolve; these are the names to add to the Store Alias tab / Master.
  *
  * Returns { summary, mismatchCount, missingStores }.
  */
-function createDbAuditSheet(spreadsheet, rows, skuLookup, storeAlias) {
+function createDbAuditSheet(spreadsheet, rows, skuLookup, storeAlias, corrections) {
   const audit = buildDbAudit(rows, skuLookup, storeAlias);
   const sm = audit.summary;
   const sheet = spreadsheet.insertSheet(CONFIG.DB_AUDIT_SHEET_NAME);
@@ -1662,47 +1821,56 @@ function createDbAuditSheet(spreadsheet, rows, skuLookup, storeAlias) {
   sheet.getRange(2, 2, summaryRows.length - 1, 1).setNumberFormat('#,##0');
   sheet.getRange(2, 3, summaryRows.length - 1, 1).setNumberFormat('#,##0.00');
 
-  const headers = ['SKU', 'Product', 'Warehouse Name', 'WH Partner', 'CBM Avail', 'Database Store(s)', 'Final Official Store', 'Mapping Source', 'Reason'];
-  sheet.getRange(9, 1, 1, headers.length).setValues([headers]);
-  const headerRange = sheet.getRange(9, 1, 1, headers.length);
+  const headers = ['SKU', 'Product', 'Warehouse Name', 'WH Partner', 'CBM Avail', 'Database Store(s)', 'Final Official Store', CONFIG.DB_AUDIT_CORRECT_HEADER, 'Mapping Source', 'Reason'];
+  const headerRow = CONFIG.DB_AUDIT_HEADER_ROW;
+  const firstRow = headerRow + 1;
+  const correctCol = CONFIG.DB_AUDIT_CORRECT_COL;
+  sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+  const headerRange = sheet.getRange(headerRow, 1, 1, headers.length);
   headerRange.setFontWeight('bold');
   headerRange.setBackground('#7F6000');
   headerRange.setFontColor('#FFFFFF');
+  const correctHeader = sheet.getRange(headerRow, correctCol);
+  correctHeader.setBackground('#00B050');
+  sheet.getRange(7, 1).setValue(`Fill column H (${CONFIG.DB_AUDIT_CORRECT_HEADER.split(' (')[0]}) with the correct Official Store or Standardized_Brand, then run the menu "SCM Reports > Re-run Raw Data SCM & Finance Data (after DB Audit correction)".`);
+  const savedCorrections = corrections || new Map();
 
   const listed = audit.mismatches.slice(0, CONFIG.DB_AUDIT_MAX_ROWS);
   if (listed.length > 0) {
     const batchSize = 5000;
     for (let i = 0; i < listed.length; i += batchSize) {
       const batch = listed.slice(i, Math.min(i + batchSize, listed.length));
-      const values = batch.map(m => [m.sku, m.product, m.warehouseName, m.whPartner, m.cbmAvail, m.dbStores, m.officialStore, m.mappingSource, m.reason]);
-      sheet.getRange(10 + i, 1, values.length, headers.length).setValues(values);
+      const values = batch.map(m => [m.sku, m.product, m.warehouseName, m.whPartner, m.cbmAvail, m.dbStores, m.officialStore,
+        savedCorrections.get(auditFillKey(m.sku, m.warehouseName, m.whPartner)) || '', m.mappingSource, m.reason]);
+      sheet.getRange(firstRow + i, 1, values.length, headers.length).setValues(values);
     }
-    sheet.getRange(10, 5, listed.length, 1).setNumberFormat('#,##0.0000');
+    sheet.getRange(firstRow, 5, listed.length, 1).setNumberFormat('#,##0.0000');
+    sheet.getRange(firstRow, correctCol, listed.length, 1).setBackground('#E2EFDA'); // input column
   } else {
-    sheet.getRange(10, 1).setValue('Every SKU found in the database has the database Official Store.');
+    sheet.getRange(firstRow, 1).setValue('Every SKU found in the database has the database Official Store.');
   }
   if (audit.mismatches.length > listed.length) {
     sheet.getRange(8, 1).setValue(`Only the ${listed.length} largest of ${audit.mismatches.length} differing rows are listed.`);
   }
-  sheet.setFrozenRows(9);
+  sheet.setFrozenRows(headerRow);
 
-  const widths = [330, 260, 220, 110, 100, 260, 220, 200, 380];
+  const widths = [330, 260, 220, 110, 100, 260, 220, 260, 200, 380];
   widths.forEach((w, idx) => sheet.setColumnWidth(idx + 1, w));
 
-  // Database store names the Master does not know (right table, column K; J is a spacer)
+  // Database store names the Master does not know (right table, column L; K is a spacer)
   const missingHeaders = ['Database store (not in Master)', 'Rows', 'CBM Avail', 'Rows resolved for Finance', 'In Store Alias?', 'Example Warehouse'];
-  sheet.getRange(1, 11, 1, missingHeaders.length).setValues([missingHeaders]);
-  const missingHeaderRange = sheet.getRange(1, 11, 1, missingHeaders.length);
+  sheet.getRange(1, 12, 1, missingHeaders.length).setValues([missingHeaders]);
+  const missingHeaderRange = sheet.getRange(1, 12, 1, missingHeaders.length);
   missingHeaderRange.setFontWeight('bold');
   missingHeaderRange.setBackground('#FFC000');
   if (audit.missingStores.length > 0) {
     const missingRows = audit.missingStores.map(m => [m.store, m.rows, m.cbm, m.resolvedRows, m.inAlias ? 'Yes' : 'No', m.exampleWarehouse]);
-    sheet.getRange(2, 11, missingRows.length, missingHeaders.length).setValues(missingRows);
-    sheet.getRange(2, 12, missingRows.length, 1).setNumberFormat('#,##0');
-    sheet.getRange(2, 13, missingRows.length, 1).setNumberFormat('#,##0.00');
-    sheet.getRange(2, 14, missingRows.length, 1).setNumberFormat('#,##0');
+    sheet.getRange(2, 12, missingRows.length, missingHeaders.length).setValues(missingRows);
+    sheet.getRange(2, 13, missingRows.length, 1).setNumberFormat('#,##0');
+    sheet.getRange(2, 14, missingRows.length, 1).setNumberFormat('#,##0.00');
+    sheet.getRange(2, 15, missingRows.length, 1).setNumberFormat('#,##0');
   }
-  [260, 70, 100, 150, 110, 240].forEach((w, idx) => sheet.setColumnWidth(11 + idx, w));
+  [260, 70, 100, 150, 110, 240].forEach((w, idx) => sheet.setColumnWidth(12 + idx, w));
 
   console.log(`DB Audit sheet created: ${audit.mismatches.length} differing rows, ${audit.missingStores.length} database stores not in Master`);
   return { summary: sm, mismatchCount: audit.mismatches.length, missingStores: audit.missingStores };
@@ -1945,6 +2113,7 @@ function buildSourceSummary(data) {
     CONFIG.SOURCE_OFFICIAL_STORE,
     CONFIG.SOURCE_RECONCILIATION,
     CONFIG.SOURCE_MANUAL,
+    CONFIG.SOURCE_MANUAL_AUDIT,
     CONFIG.SOURCE_UNMAPPED
   ];
   const sourceSummary = sourceLabels.map(label => ({ label: label, rows: 0, cbm: 0 }));
@@ -1997,6 +2166,52 @@ function writeMappingSourceSummary(sheet, sourceSummary, rowCount, skuMappingTot
 
 
 /**
+ * Where the "CORRECT STORE ..." column is in the DB Audit sheet values: { headerIdx, col } (0-based) or null when the
+ * sheet has no such column (an output made before it existed). Found by header text in the first rows.
+ */
+function findDbAuditCorrectColumn(values) {
+  if (!values) return null;
+  const scan = Math.min(values.length, 40);
+  for (let i = 0; i < scan; i++) {
+    for (let j = 0; j < values[i].length; j++) {
+      if (normKey(values[i][j]).indexOf('correct store') === 0) return { headerIdx: i, col: j };
+    }
+  }
+  return null;
+}
+
+
+/**
+ * The corrections typed into column H of the DB Audit sheet: Map "SKU|Warehouse Name|WH Partner" -> typed store.
+ * `values` = the sheet's data range (row 1 = sheet row 1). The header row is found by the text of the correction
+ * column ("CORRECT STORE ..."), so inserting columns does not break it; SKU / Warehouse Name / WH Partner are taken
+ * from the same header row (fallback columns A, C, D). A blank cell is no correction (a value equal to the current
+ * Official Store is kept, so a rebuilt sheet still shows it; the re-run simply finds nothing to change for it).
+ */
+function parseDbAuditCorrections(values) {
+  const out = new Map();
+  const located = findDbAuditCorrectColumn(values);
+  if (!located) return out;
+  const headerIdx = located.headerIdx, correctCol = located.col;
+
+  const header = values[headerIdx].map(normKey);
+  const col = (name, fallback) => { const i = header.indexOf(normKey(name)); return i === -1 ? fallback : i; };
+  const cSku = col('SKU', 0);
+  const cWarehouse = col('Warehouse Name', 2);
+  const cPartner = col('WH Partner', 3);
+
+  for (let i = headerIdx + 1; i < values.length; i++) {
+    const r = values[i];
+    const sku = String(r[cSku] || '').trim();
+    const typed = String(r[correctCol] || '').trim();
+    if (!sku || !typed) continue;
+    out.set(auditFillKey(sku, r[cWarehouse], r[cPartner]), typed);
+  }
+  return out;
+}
+
+
+/**
  * RE-RUN after the "Official_Store (to fill in)" column (column I) of the "Unmapped SKU" sheet has
  * been filled in manually.
  *
@@ -2018,6 +2233,25 @@ function writeMappingSourceSummary(sheet, sourceSummary, rowCount, skuMappingTot
  * Finance Data can only show them as Unmapped until the name matches the Master.
  */
 function rerunFromUnmappedSkuFill() {
+  rerunMapping(false);
+}
+
+
+/**
+ * Menu: re-run Raw Data SCM / Finance Data / Breakdown after the correct stores were typed into column H
+ * ("CORRECT STORE (to fill in and re run)") of the DB Audit sheet. Same re-run as above, plus the DB Audit corrections.
+ */
+function rerunFromDbAuditFill() {
+  rerunMapping(true);
+}
+
+
+/**
+ * Shared re-run. useDbAudit = also apply the corrections typed into the DB Audit sheet (column H).
+ * The Unmapped SKU fill-ins, the Reconciliation Mapping, the Store Alias tab and the name-based Brand fallback
+ * (CONFIG.AUTO_BRAND_NAME_MATCH) are applied in both modes.
+ */
+function rerunMapping(useDbAudit) {
   const startedAt = Date.now();
   const logElapsed = label => console.log(`[timing] ${label}: ${((Date.now() - startedAt) / 1000).toFixed(1)}s elapsed`);
   const ui = SpreadsheetApp.getUi();
@@ -2081,6 +2315,19 @@ function rerunFromUnmappedSkuFill() {
     }
     console.log(`Manual fill-ins found in "${CONFIG.UNMAPPED_SKU_SHEET_NAME}": ${fills.size}`);
 
+    // 2b) DB Audit column H: the correct stores typed by hand. Read in both modes so the rebuilt DB Audit sheet keeps
+    //     them; only applied to the pivot rows when useDbAudit.
+    const auditSheet = spreadsheet.getSheetByName(CONFIG.DB_AUDIT_SHEET_NAME);
+    if (useDbAudit && !auditSheet) {
+      throw new Error(`The selected file has no "${CONFIG.DB_AUDIT_SHEET_NAME}" sheet. Process the daily report again, or use the other re-run menu.`);
+    }
+    const auditValues = auditSheet ? auditSheet.getDataRange().getValues() : null;
+    if (useDbAudit && !findDbAuditCorrectColumn(auditValues)) {
+      throw new Error(`The "${CONFIG.DB_AUDIT_SHEET_NAME}" sheet of this file has no "${CONFIG.DB_AUDIT_CORRECT_HEADER}" column (the file was made before it existed). Process the daily report again to get it.`);
+    }
+    const auditEntries = auditValues ? parseDbAuditCorrections(auditValues) : new Map();
+    console.log(`Corrections typed in "${CONFIG.DB_AUDIT_SHEET_NAME}" column H: ${auditEntries.size} (${useDbAudit ? 'applied in this run' : 'kept, not applied in this run'})`);
+
     // 3) Apply the fill-ins (manual wins). For the rows still open:
     //    - "SKU Database (not in Master)": the database store STAYS the Official Store; only its Finance Data
     //      resolution (Store Alias / Master key via the Reconciliation Mapping) is refreshed
@@ -2091,6 +2338,9 @@ function rerunFromUnmappedSkuFill() {
     logElapsed('after Reconciliation Mapping load');
     const storeAlias = loadStoreAlias();
     logElapsed('after Store Alias load');
+    // Store Alias tab + the aliases derived from the Master for corrected / name-matched stores (never written back)
+    const aliasWork = new Map(storeAlias);
+    const addDerivedAlias = alias => { if (alias && !aliasWork.has(normKey(alias.store))) aliasWork.set(normKey(alias.store), alias); };
     const REASON_PREFIX = ' - Reconciliation Mapping';
     const isOpenSource = src => src === CONFIG.SOURCE_UNMAPPED || src === CONFIG.SOURCE_SKU_DB_NO_MASTER;
     const masterKnows = (store, row) => !!store &&
@@ -2099,14 +2349,50 @@ function rerunFromUnmappedSkuFill() {
     let dbResolvedRows = 0, dbResolvedCbm = 0; // database stores that became resolvable for Finance Data in this run
     const reconFailures = new Map(); // reason -> { rows, cbm }
 
+    let auditRows = 0, auditCbm = 0;                  // DB Audit column H corrections applied
+    const auditUnresolved = new Map();                // "typed | warehouse | partner" -> cbm (Finance stays Unmapped)
+    const matchedAuditKeys = new Set();
+    const nameMatched = new Map();                    // "store -> brand" -> { rows, cbm } (database stores matched to a brand by name)
     let appliedRows = 0, appliedCbm = 0, notInMasterRows = 0, notInMasterCbm = 0;
     const notInMasterNames = new Map(); // "store | warehouse | partner" -> cbm
     const matchedKeys = new Set();
 
     const updated = skuData.map(row => {
       const unchanged = Object.assign({}, row, { masterStore: '', financeResolved: true });
-      if (!isOpenSource(row.mappingSource)) return unchanged;
       const key = fillKey(row.sku, row.warehouseName, row.whPartner);
+
+      // DB Audit correction (column H): applies to any row, whatever its mapping source
+      if (useDbAudit && auditEntries.has(key)) {
+        matchedAuditKeys.add(key);
+        const typed = auditEntries.get(key);
+        if (normKey(typed) !== normKey(row.officialStore)) {
+          const r = resolveCorrectedStore(typed, row.warehouseName, row.whPartner, masterMapping, storeAlias, false);
+          auditRows++;
+          auditCbm += row.cbmAvail;
+          if (!r.resolved) {
+            const k = `${typed} | ${row.warehouseName} | ${row.whPartner}`;
+            auditUnresolved.set(k, (auditUnresolved.get(k) || 0) + row.cbmAvail);
+          }
+          addDerivedAlias(r.alias);
+          if (r.how === 'name') {
+            const nk = `${typed} -> ${r.alias.standardizedBrand} (typed in DB Audit)`;
+            const stat = nameMatched.get(nk) || { rows: 0, cbm: 0 };
+            stat.rows++;
+            stat.cbm += row.cbmAvail;
+            nameMatched.set(nk, stat);
+          }
+          return Object.assign({}, row, { officialStore: r.officialStore, remarks: r.remarks, mappingSource: CONFIG.SOURCE_MANUAL_AUDIT, masterStore: r.masterStore, financeResolved: r.resolved });
+        }
+      }
+
+      // A row corrected in an earlier run: rebuild its Finance resolution (alias / Master key are not stored in the sheet)
+      if (row.mappingSource === CONFIG.SOURCE_MANUAL_AUDIT) {
+        const r = resolveCorrectedStore(row.officialStore, row.warehouseName, row.whPartner, masterMapping, storeAlias, true);
+        addDerivedAlias(r.alias);
+        return Object.assign({}, row, { masterStore: r.masterStore || row.masterStore || '', financeResolved: r.resolved });
+      }
+
+      if (!isOpenSource(row.mappingSource)) return unchanged;
       const store = fills.get(key);
       const ac = acByKey.get(key);
 
@@ -2116,9 +2402,29 @@ function rerunFromUnmappedSkuFill() {
         if (row.mappingSource === CONFIG.SOURCE_SKU_DB_NO_MASTER) {
           const fin = resolveFinanceKey(row.officialStore, ac, row.warehouseName, row.whPartner, masterMapping, reconLookup, storeAlias);
           const keptKey = masterKnows(row.masterStore, row) ? row.masterStore : ''; // key found by an earlier run
-          const masterStore = fin.masterStore || keptKey;
-          const resolved = fin.hasAlias || !!masterStore;
-          const wasResolved = !!keptKey || /Brand via Store Alias/.test(row.remarks);
+          let masterStore = fin.masterStore || keptKey;
+          let resolved = fin.hasAlias || !!masterStore;
+          let nameRemark = '';
+          // Only where the warehouse itself cannot give the Brand (it holds several brands in the Master, so Finance Data
+          // would stay Unmapped): a single-brand warehouse already resolves through its uniform Master fields
+          const wEntry = masterMapping.warehouseLookup.get(warehouseKey(row.warehouseName, row.whPartner));
+          const brandNeedsHelp = !(wEntry && wEntry.uniformFields && wEntry.uniformFields.standardizedBrand);
+          if (!resolved && CONFIG.AUTO_BRAND_NAME_MATCH && brandNeedsHelp) {
+            // neither Store Alias nor Reconciliation Mapping knows this store: take the Brand from the Master by name
+            const auto = resolveCorrectedStore(row.officialStore, row.warehouseName, row.whPartner, masterMapping, storeAlias, true);
+            if (auto.resolved && auto.alias) {
+              addDerivedAlias(auto.alias);
+              masterStore = auto.masterStore;
+              resolved = true;
+              nameRemark = auto.remarks;
+              const nk = `${row.officialStore} -> ${auto.alias.standardizedBrand}`;
+              const stat = nameMatched.get(nk) || { rows: 0, cbm: 0 };
+              stat.rows++;
+              stat.cbm += row.cbmAvail;
+              nameMatched.set(nk, stat);
+            }
+          }
+          const wasResolved = !!keptKey || /Brand via Store Alias|Brand matched by name|Brand via Master brand/.test(row.remarks);
           if (resolved && !wasResolved) {
             dbResolvedRows++;
             dbResolvedCbm += row.cbmAvail;
@@ -2130,7 +2436,7 @@ function rerunFromUnmappedSkuFill() {
             reconFailures.set(fin.reason, stat);
           }
           return Object.assign({}, row, {
-            remarks: describeNotInMaster({ hasAlias: fin.hasAlias, masterStore: masterStore, reason: resolved ? '' : fin.reason }),
+            remarks: describeNotInMaster({ hasAlias: fin.hasAlias, masterStore: masterStore, reason: resolved ? '' : fin.reason }) + (nameRemark ? ` (${nameRemark})` : ''),
             masterStore: masterStore,
             financeResolved: resolved
           });
@@ -2178,18 +2484,23 @@ function rerunFromUnmappedSkuFill() {
     });
 
     const skippedFills = fills.size - matchedKeys.size; // fill-ins that matched no open pivot row
+    const skippedAudit = useDbAudit ? auditEntries.size - matchedAuditKeys.size : 0; // DB Audit corrections that matched no pivot row
     const stillOpenRows = updated.filter(r => r.mappingSource === CONFIG.SOURCE_UNMAPPED ||
       (r.mappingSource === CONFIG.SOURCE_SKU_DB_NO_MASTER && r.financeResolved === false)).length;
-    console.log(`Applied ${appliedRows} manual rows (CBM ${appliedCbm.toFixed(2)}); ${reconRows} via Reconciliation Mapping (CBM ${reconCbm.toFixed(2)}); ${dbResolvedRows} database stores newly resolved for Finance Data (CBM ${dbResolvedCbm.toFixed(2)}); ${notInMasterRows} not in Master; ${skippedFills} fill-ins matched no open row; ${stillOpenRows} rows still open`);
+    console.log(`Applied ${auditRows} DB Audit corrections (CBM ${auditCbm.toFixed(2)}, ${skippedAudit} matched no row); ${nameMatched.size} database store names matched to a Brand by name; applied ${appliedRows} manual rows (CBM ${appliedCbm.toFixed(2)}); ${reconRows} via Reconciliation Mapping (CBM ${reconCbm.toFixed(2)}); ${dbResolvedRows} database stores newly resolved for Finance Data (CBM ${dbResolvedCbm.toFixed(2)}); ${notInMasterRows} not in Master; ${skippedFills} fill-ins matched no open row; ${stillOpenRows} rows still open`);
 
-    if (appliedRows === 0 && reconRows === 0 && dbResolvedRows === 0) {
-      ui.alert('Nothing to re-run', `No manual Official Store in "${CONFIG.UNMAPPED_SKU_SHEET_NAME}" (column "Official_Store (to fill in)") and neither the Reconciliation Mapping nor the "${CONFIG.STORE_ALIAS_SHEET_NAME}" tab resolved any open row. Fill the column in or complete the "${CONFIG.RECONCILIATION_SHEET_NAME}" / "${CONFIG.STORE_ALIAS_SHEET_NAME}" / Master tabs first, then run this menu again.`, ui.ButtonSet.OK);
+    if (appliedRows === 0 && reconRows === 0 && dbResolvedRows === 0 && auditRows === 0) {
+      const auditHint = useDbAudit
+        ? `Nothing was typed in column H ("${CONFIG.DB_AUDIT_CORRECT_HEADER}") of "${CONFIG.DB_AUDIT_SHEET_NAME}" that differs from the current Official Store, and `
+        : '';
+      ui.alert('Nothing to re-run', `${auditHint}No manual Official Store in "${CONFIG.UNMAPPED_SKU_SHEET_NAME}" (column "Official_Store (to fill in)") and neither the Reconciliation Mapping nor the "${CONFIG.STORE_ALIAS_SHEET_NAME}" tab resolved any open row. Fill the column in or complete the "${CONFIG.RECONCILIATION_SHEET_NAME}" / "${CONFIG.STORE_ALIAS_SHEET_NAME}" / Master tabs first, then run this menu again.`, ui.ButtonSet.OK);
       return;
     }
 
     const confirm = ui.alert(
       'Re-run Raw Data SCM, Finance Data & Breakdown',
       `File: ${outputFile.getName()}\n\n` +
+      (useDbAudit ? `DB Audit corrections found: ${auditEntries.size}; applied to ${auditRows} pivot rows (CBM ${auditCbm.toFixed(2)}); matching no row: ${skippedAudit}\n` : '') +
       `Manual Official Stores found: ${fills.size}\n` +
       `Pivot rows updated from manual fill-in: ${appliedRows} (CBM ${appliedCbm.toFixed(2)})\n` +
       `Pivot rows updated from Reconciliation Mapping: ${reconRows} (CBM ${reconCbm.toFixed(2)})\n` +
@@ -2223,7 +2534,7 @@ function rerunFromUnmappedSkuFill() {
 
     const skuLookup = loadSkuMappingDatabase();
     logElapsed('after SKU database load');
-    const dbAudit = createDbAuditSheet(spreadsheet, updated, skuLookup, storeAlias);
+    const dbAudit = createDbAuditSheet(spreadsheet, updated, skuLookup, storeAlias, auditEntries);
     logElapsed('after DB Audit sheet');
 
     const dedupData = deduplicateAndSumData(updated);
@@ -2231,7 +2542,7 @@ function rerunFromUnmappedSkuFill() {
     const rawDataReconciliation = createRawDataSheet(spreadsheet, dedupData, originalTotalCbm, rawDataSCMTotal);
     logElapsed('after Raw Data SCM sheet');
 
-    const financeData = standardizeDataForFinance(dedupData, masterMapping, storeAlias);
+    const financeData = standardizeDataForFinance(dedupData, masterMapping, aliasWork);
     const financeTotal = sumCbmAvail(financeData);
     const financeReconciliation = createFinanceDataSheet(spreadsheet, financeData, rawDataSCMTotal, financeTotal);
     logElapsed('after Finance Data sheet');
@@ -2251,6 +2562,31 @@ function rerunFromUnmappedSkuFill() {
       `Finance Data -> Breakdown: ${breakdownResult.reconciliation.status} (variance ${breakdownResult.reconciliation.variance})`;
 
     let notInMasterLines = '';
+    if (auditUnresolved.size > 0) {
+      const topAudit = Array.from(auditUnresolved.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10)
+        .map(e => `${e[0]} -> ${e[1].toFixed(2)}`);
+      notInMasterLines += `\n\nDB Audit corrections whose store name is NOT a Master store, Standardized_Brand or Store Alias name (Finance Data stays Unmapped for them; correct the name in column H and re-run). Top by CBM:\n${topAudit.join('\n')}`;
+      console.warn(`DB Audit corrections not resolvable:\n${topAudit.join('\n')}`);
+    }
+    if (nameMatched.size > 0) {
+      const topName = Array.from(nameMatched.entries()).sort((a, b) => b[1].cbm - a[1].cbm).slice(0, 15)
+        .map(e => `${e[0]}: ${e[1].rows} rows, CBM ${e[1].cbm.toFixed(2)}`);
+      notInMasterLines += `\n\nDatabase stores whose Brand was taken from the Master BY NAME (please check; add them to the "${CONFIG.STORE_ALIAS_SHEET_NAME}" tab to make it permanent). Top by CBM:\n${topName.join('\n')}`;
+      console.log(`Brand matched by name:\n${topName.join('\n')}`);
+    }
+    if (finalUnmapped.length > 0) {
+      const left = [];
+      dedupData.forEach((d, i) => {
+        const f = financeData[i];
+        if (f.standardizedBrand === CONFIG.UNMAPPED_LABEL || f.standardizedWHP === CONFIG.UNMAPPED_LABEL ||
+            f.standardizedSubsidiary === CONFIG.UNMAPPED_LABEL || f.standardizedMappingBrand === CONFIG.UNMAPPED_LABEL) {
+          left.push([`${d.officialStore} | ${d.warehouseName} | ${d.whPartner}`, d.cbmAvail]);
+        }
+      });
+      const topLeft = left.sort((a, b) => b[1] - a[1]).slice(0, 10).map(e => `${e[0]} -> ${e[1].toFixed(2)}`);
+      notInMasterLines += `\n\nStill Unmapped in Finance Data (Official Store | Warehouse | Partner). Top by CBM:\n${topLeft.join('\n')}`;
+      console.warn(`Still Unmapped in Finance Data:\n${topLeft.join('\n')}`);
+    }
     if (notInMasterNames.size > 0) {
       const top = Array.from(notInMasterNames.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10)
         .map(e => `${e[0]} -> ${e[1].toFixed(2)}`);
@@ -2267,6 +2603,7 @@ function rerunFromUnmappedSkuFill() {
 
     showAlert('Re-run completed',
       `Output file: ${outputFile.getName()}\nURL: ${spreadsheet.getUrl()}\n\n` +
+      (useDbAudit ? `DB Audit corrections applied: ${auditRows} rows (CBM ${auditCbm.toFixed(2)}); not matching any row: ${skippedAudit}\n` : '') +
       `Manual mapping applied: ${appliedRows} rows (CBM ${appliedCbm.toFixed(2)})\n` +
       `Reconciliation Mapping applied: ${reconRows} rows (CBM ${reconCbm.toFixed(2)})\n` +
       `Database stores newly resolved for Finance Data: ${dbResolvedRows} (CBM ${dbResolvedCbm.toFixed(2)})\n` +
@@ -2292,5 +2629,6 @@ function onOpen() {
   ui.createMenu('SCM Reports')
     .addItem('Process Daily Report', 'processScmDailyReport')
     .addItem('Re-run Raw Data SCM & Finance Data (after Unmapped SKU fill-in)', 'rerunFromUnmappedSkuFill')
+    .addItem('Re-run Raw Data SCM & Finance Data (after DB Audit correction)', 'rerunFromDbAuditFill')
     .addToUi();
 }
