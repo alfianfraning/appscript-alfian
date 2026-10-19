@@ -80,7 +80,7 @@
 // no way to know its own JS/HTML is out of date. Per Zoltraak 2026-08-14. Forgetting to bump this
 // just means the notification doesn't fire for that particular deployment — harmless, but the
 // point of the feature is lost, so bump it every time.
-const DASHBOARD_VERSION = '2026-10-19.abc-7'; // 2026-10-19 (abc-7): 202608+ Platform Fee Absorb total = the Summary tab's "Absorb Sirclo" total (PF tabs alone missed hand-typed lines: 244,900,080 vs 288,805,465), marketplace split from the PF tabs; 2026-10-13 (abc-6): from 202608 the "YYYYMM - Summary MP Fee" file's Absorb comes from its "PF <Marketplace>" tabs (every 'Absorb' column); // 2026-10-13: Platform Fee Absorb by SIRCLO now read from "YYYYMM - Summary MP Fee - ABC Official Store" ('Absorb Sirclo' column) instead of Platform Fee files; // 2026-09-26: Marketplace -> ORAMI (B2B) / NON-ORAMI (B2C) + DC-tab preference
+const DASHBOARD_VERSION = '2026-10-19.abc-8'; // 2026-10-19 (abc-8): Summary tab read as a whole tab + warnings when the Summary total can't be read; 2026-10-19 (abc-7): 202608+ Platform Fee Absorb total = the Summary tab's "Absorb Sirclo" total (PF tabs alone missed hand-typed lines: 244,900,080 vs 288,805,465), marketplace split from the PF tabs; 2026-10-13 (abc-6): from 202608 the "YYYYMM - Summary MP Fee" file's Absorb comes from its "PF <Marketplace>" tabs (every 'Absorb' column); // 2026-10-13: Platform Fee Absorb by SIRCLO now read from "YYYYMM - Summary MP Fee - ABC Official Store" ('Absorb Sirclo' column) instead of Platform Fee files; // 2026-09-26: Marketplace -> ORAMI (B2B) / NON-ORAMI (B2C) + DC-tab preference
 
 // The "FS Overview" folder: https://drive.google.com/drive/folders/1Byx4jIgraJNv5S374NKOU5ErM70MR2uo
 const ROOT_FOLDER_ID = '1Byx4jIgraJNv5S374NKOU5ErM70MR2uo';
@@ -2216,12 +2216,17 @@ function parseAbsorbAmount_(v) {
  */
 function readAbsorbSummaryTabTotal_(t, allTabs, warnings) {
   const tab = allTabs.find(s => /^summary(\s+mp\s+fee)?$/i.test(s.title.trim()));
-  if (!tab) return null;
+  if (!tab) {
+    warnings.push('"' + t.fileName + '": no "Summary" tab found — Platform Fee Absorb by SIRCLO uses the PF-tab sum only.');
+    return null;
+  }
   let resp;
   try {
+    // Whole tab by name (no A1 bounds): the tab is small, and a fixed range such as A1:L80 can be rejected when the
+    // tab's grid is smaller than the range.
     resp = callSheetsApi_(() => Sheets.Spreadsheets.Values.get(
       t.fileId,
-      "'" + tab.title.replace(/'/g, "''") + "'!A1:L80",
+      "'" + tab.title.replace(/'/g, "''") + "'",
       { valueRenderOption: 'UNFORMATTED_VALUE' }
     ));
   } catch (err) {
@@ -2236,7 +2241,10 @@ function readAbsorbSummaryTabTotal_(t, allTabs, warnings) {
     const ai = norm.findIndex(h => h.indexOf('absorb') !== -1 && h.indexOf('%') === -1);
     if (di !== -1 && ai !== -1) { headerRow = r; descCol = di; absCol = ai; }
   }
-  if (headerRow === -1) return null;
+  if (headerRow === -1) {
+    warnings.push('"' + t.fileName + '": no header row with "Description" and "Absorb Sirclo" found in the "' + tab.title + '" tab — Platform Fee Absorb by SIRCLO uses the PF-tab sum only.');
+    return null;
+  }
   let grand = null, support = null, mpFee = null;
   for (let r = headerRow + 1; r < rows.length; r++) {
     const row = rows[r] || [];
@@ -2249,6 +2257,7 @@ function readAbsorbSummaryTabTotal_(t, allTabs, warnings) {
   }
   if (grand !== null) return grand;
   if (support !== null || mpFee !== null) return (support || 0) + (mpFee || 0);
+  warnings.push('"' + t.fileName + '": no "Total Claim Support + Marketplace Fee" row found in the "' + tab.title + '" tab — Platform Fee Absorb by SIRCLO uses the PF-tab sum only.');
   return null;
 }
 
