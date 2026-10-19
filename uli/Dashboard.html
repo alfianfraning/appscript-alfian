@@ -9391,14 +9391,6 @@ function buildExportPayload_(rows) {
     const columns = built.columns;
     if (!columns.length) return null;
     const columnHeaders = columns.map(c => c.label);
-    // Index (into `columns`) of the period TOTAL column each column belongs to: a period total column is its own,
-    // an entity-breakdown column points at the period total column right before it — used by the "% Cont. to SoG"
-    // rows whose denominator is the period's total Sales of Goods (see PCT_SOG_ROW_BY_PARENT / (g2) / (a2)).
-    const periodMainIdx = [];
-    {
-      let lastMainIdx = 0;
-      columns.forEach((c, i) => { if (!c.isEntityBreakdown) lastMainIdx = i; periodMainIdx.push(lastMainIdx); });
-    }
     // Maps each index into `built.rowBreakdown`'s OWN (pre-entity-breakdown) period-column list onto
     // its new index in `columns` above — see withEntityColumnBreakdown_'s own comment. Identity
     // mapping (a no-op) for a dimension that never adds entity sub-columns at all.
@@ -10324,12 +10316,12 @@ function buildExportPayload_(rows) {
         // so `salesGroupEntries[idx]` is always THIS SAME entity's own Sales of Goods figures —
         // no label-matching needed, just the same positional `idx`.
         // REVISED 2026-10-19 per Zoltraak: Claim 10% COGS / Additional Budget Promo / Claim Vouchers no longer divide
-        // by THAT entity's own Sales of Goods — "% Cont. to SoG <division>" = the division's value ÷ TOTAL Sales of
-        // Goods of that period (useTotalSalesOfPeriod, below). Total Operational and Fulfillment Cost keeps its own
-        // per-entity denominator (2026-09-16).
+        // by THAT entity's own Sales of Goods row — "% Cont. to SoG <division>" = the division's value ÷ the (total)
+        // Sales of Goods row of the SAME column, e.g. `=IFERROR(AQ50/AQ32*100,0)` in the H1 column (the flat
+        // pctContDenominatorRow, same as every other "% Cont. to SoG" row). Total Operational and Fulfillment Cost
+        // keeps its own per-entity denominator (2026-09-16).
         const usePerEntitySalesDenom = (def.key === 'totalOpCost')
           && pctContDenominatorRow === salesRow && salesGroupValueGroupStart != null;
-        const useTotalSalesOfPeriod = !!PCT_SOG_ROW_BY_PARENT[def.key] && pctContDenominatorRow === salesRow;
         const salesGroupEntries = usePerEntitySalesDenom ? built.rowBreakdownGroup('sales') : null;
         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow && pctContDenominatorRow) {
           rowLabels.push('');
@@ -10351,10 +10343,7 @@ function buildExportPayload_(rows) {
             rowIsBold.push(false);
             values.push(columns.map((c, colIdx) => {
               const colLetter = columnLetter_(colIdx + 3);
-              // An entity-breakdown column divides by its PERIOD'S total column (e.g. Unilever BW's January column
-              // by January's total Sales of Goods), not by its own column's Sales of Goods.
-              const denomLetter = useTotalSalesOfPeriod ? columnLetter_(periodMainIdx[colIdx] + 3) : colLetter;
-              return `=IFERROR(${colLetter}${ownRow}/${denomLetter}${denomRow}*100,0)`;
+              return `=IFERROR(${colLetter}${ownRow}/${colLetter}${denomRow}*100,0)`;
             }));
             const salesEntry = usePerEntitySalesDenom ? salesGroupEntries[idx] : null;
             const pctHighlightArr = new Array(columns.length).fill(null);
@@ -10441,10 +10430,9 @@ function buildExportPayload_(rows) {
         // Marketplace" (the only 2 sheets that ever reach this Store-level block with a real
         // breakdown, since "Per Period per Store" always sets rowBreakdown to null).
         // REVISED 2026-10-19 per Zoltraak — see the (g2) block's matching comment: Claim 10% COGS / Additional Budget
-        // Promo / Claim Vouchers now divide by the TOTAL Sales of Goods of the period (per Warehouse / Marketplace too).
+        // Promo / Claim Vouchers now divide by the Sales of Goods row of the same column (per Warehouse / Marketplace too).
         const usePerEntitySalesDenom = (def.key === 'totalOpCost')
           && pctContDenominatorRow === salesRow && salesValueGroupStart != null;
-        const useTotalSalesOfPeriod = !!PCT_SOG_ROW_BY_PARENT[def.key] && pctContDenominatorRow === salesRow;
         const salesEntriesForDenom = usePerEntitySalesDenom ? built.rowBreakdown('sales') : null;
         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow && pctContDenominatorRow) {
           // Blank spacer row — deliberately OUTSIDE both row groups (never added to rowGroups), so
@@ -10471,10 +10459,7 @@ function buildExportPayload_(rows) {
             rowIsBold.push(false);
             values.push(columns.map((c, colIdx) => {
               const colLetter = columnLetter_(colIdx + 3);
-              // An entity-breakdown column divides by its PERIOD'S total column (e.g. Unilever BW's January column
-              // by January's total Sales of Goods), not by its own column's Sales of Goods.
-              const denomLetter = useTotalSalesOfPeriod ? columnLetter_(periodMainIdx[colIdx] + 3) : colLetter;
-              return `=IFERROR(${colLetter}${ownRow}/${denomLetter}${denomRow}*100,0)`;
+              return `=IFERROR(${colLetter}${ownRow}/${colLetter}${denomRow}*100,0)`;
             }));
             // Plain-number twin for highlight purposes only — this entity's own raw value (from
             // `entry.values`, pre-remap) divided by the SAME denominator the live formula above
