@@ -1,0 +1,140 @@
+--- Engine_orig.gs
++++ Engine.gs
+@@ -2541,6 +2541,21 @@
+   // the normal value/breakdown/pct machinery every other dataRowDefs entry uses.
+   const dataRowDefs = ROW_DEFS.filter(def => (!def.isHeader || def.exportBlankRow) && def.key);
+ 
++  // "% Contribution to SoG" rows of Claim 10% COGS / Additional Budget Promo / Claim Vouchers — REVISED
++  // 2026-10-19 per Zoltraak: each of these 3 sections now reads
++  //     <metric>
++  //        <entity value rows>
++  //     % Contribution to SoG          <- moved UP from below the per-entity "% Cont. to SoG" rows
++  //     <blank spacer>
++  //        % Cont. to SoG <entity> ...
++  // so the ROW_DEFS "% Contribution to SoG" row (PCT_SOG_ROW_BY_PARENT below) is no longer written by its own
++  // dataRowDefs iteration: its parent's iteration writes it right after the parent's FIRST block of entity value
++  // rows (or directly under the parent when it has no breakdown). The 2 ratio rows' own entity-breakdown value rows
++  // (the extra Group/Store rows that used to hang under "% Contribution to SoG" of Additional Budget Promo / Claim
++  // Vouchers — they just repeated the per-entity % rows below in a different unit) are dropped.
++  const PCT_SOG_ROW_BY_PARENT = { claim10PctCogs: 'claim10PctCogsPctSog', additionalBudgetPromo: 'additionalBudgetPromoPctSog', claimVouchers: 'claimVouchersPctSog' };
++  const PCT_SOG_ROW_KEYS = Object.keys(PCT_SOG_ROW_BY_PARENT).map(k => PCT_SOG_ROW_BY_PARENT[k]);
++
+ 
+ 
+ 
+@@ -2648,6 +2663,7 @@
+     // number to reference, not about write order.
+     let preSheetRow = EXPORT_DATA_START_ROW;
+     dataRowDefs.forEach(def => {
++      if (PCT_SOG_ROW_KEYS.includes(def.key)) return; // placed by its parent's iteration — see PCT_SOG_ROW_BY_PARENT
+       rowNumberByKey[def.key] = preSheetRow;
+       preSheetRow += 1;
+       const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
+@@ -2667,8 +2683,22 @@
+       // baru Store").
+       const groupBreakdownEntries = (built.rowBreakdownGroup && isBreakdownEligibleRow) ? built.rowBreakdownGroup(def.key) : null;
+       const hasRealGroupBreakdown = !!(groupBreakdownEntries && groupBreakdownEntries.length);
++      // Row of this metric's "% Contribution to SoG" (Claim 10% COGS / Additional Budget Promo / Claim Vouchers) —
++      // counted right after the FIRST block of entity value rows (Group, else Store), or directly under the metric
++      // when it has no breakdown at all. Mirrors emitPctSogRow in the main pass below.
++      const pctSogKeyPre = PCT_SOG_ROW_BY_PARENT[def.key];
++      const pctSogInSheetPre = !!pctSogKeyPre && dataRowDefs.some(d => d.key === pctSogKeyPre);
++      let pctSogPlacedPre = false;
++      const placePctSogPre = () => {
++        if (!pctSogInSheetPre || pctSogPlacedPre) return;
++        pctSogPlacedPre = true;
++        rowNumberByKey[pctSogKeyPre] = preSheetRow;
++        preSheetRow += 1;
++      };
++      if (pctSogInSheetPre && !hasRealGroupBreakdown && !(built.rowBreakdown && isBreakdownEligibleRow && (built.rowBreakdown(def.key) || []).length)) placePctSogPre();
+       if (hasRealGroupBreakdown) {
+         preSheetRow += groupBreakdownEntries.length; // (g1) value rows
++        placePctSogPre();
+         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow) {
+           preSheetRow += 1; // blank spacer row
+           preSheetRow += groupBreakdownEntries.length; // (g2) per-entity pct rows
+@@ -2681,6 +2711,7 @@
+         : EXPORT_PLAIN_PCT_CONT_EXTRA_KEYS.includes(def.key);
+       if (hasRealBreakdown) {
+         preSheetRow += breakdownEntries.length; // (a1) value rows — every breakdown-eligible row
++        placePctSogPre();
+         // (a2) blank spacer + per-entity "% Cont. to SoG/CM/GP" rows — skipped for the 2 ratio rows
+         // (unchanged) AND for the new value-only-breakdown rows (Rebates, Other Revenue, COGS,
+         // Surplus, MOGTM Distributor Fee, Promo Fund Front/Back Margin — per Zoltraak, value only).
+@@ -3165,6 +3196,7 @@
+ 
+ 
+     dataRowDefs.forEach(def => {
++      if (PCT_SOG_ROW_KEYS.includes(def.key)) return; // written by its parent's iteration — see PCT_SOG_ROW_BY_PARENT
+       // Blank divider row — added 2026-08-31 per Zoltraak ("add new blank line after claim
+       // vouchers"). Normally isHeader rows are excluded entirely from the export (see
+       // dataRowDefs' own filter comment), but this one opts back in via exportBlankRow so it can
+@@ -3404,6 +3436,27 @@
+       // pctContLabel/pctContDenominatorRow are shared unchanged with the Store block below — a Group
+       // direct member's share of the SAME column total (e.g. combined Contribution Margin, or Sales
+       // of Goods) is exactly as meaningful as a real store's own share of that same total.
++      // "% Contribution to SoG" row of this metric (Claim 10% COGS / Additional Budget Promo / Claim Vouchers) —
++      // REVISED 2026-10-19 per Zoltraak: written right after the FIRST block of entity value rows (Group, else Store),
++      // i.e. ABOVE the blank spacer + per-entity "% Cont. to SoG" rows (it used to come after them); directly under
++      // the metric when it has no breakdown. Same plain number the dashboard shows (deriveMetrics' *PctSog).
++      const pctSogKey = PCT_SOG_ROW_BY_PARENT[def.key];
++      const pctSogDef = pctSogKey ? dataRowDefs.find(d => d.key === pctSogKey) : null;
++      let pctSogDone = false;
++      const emitPctSogRow = () => {
++        if (!pctSogDef || pctSogDone) return;
++        pctSogDone = true;
++        rowLabels.push(TABLE2_LABEL_OVERRIDES[pctSogDef.key] || pctSogDef.label || pctSogDef.tag || pctSogDef.key);
++        rowFormats.push(EXPORT_NUMBER_FORMAT[pctSogDef.fmt] || '#,##0');
++        rowIsBold.push(true);
++        const pctSogRaw = columns.map(c => (c.data && c.data[pctSogDef.key]) || 0);
++        values.push(pctSogRaw);
++        rowHighlights.push(computeHighlightCols_(pctSogRaw));
++        rowNumberByKey[pctSogDef.key] = sheetRow;
++        sheetRow += 1;
++      };
++      if (!hasRealGroupBreakdown && !hasRealBreakdown) emitPctSogRow();
++
+       if (hasRealGroupBreakdown) {
+         // (g1) Group-level plain breakdown VALUE rows — see (a1) below for the full explanation this
+         // mirrors line-for-line.
+@@ -3447,6 +3500,7 @@
+         // sales-only capture just above.
+         groupEntityRowStartByKey[def.key] = groupValueGroupStart;
+         groupEntityCount = groupBreakdownEntries.length;
++        emitPctSogRow();
+ 
+         // (g2) One "% Cont. to SoG/GP/CM <entity>" row per Group direct member — see (a2) below for
+         // the full explanation this mirrors line-for-line.
+@@ -3465,7 +3519,12 @@
+         // entity list/order never depends on which rowKey it's called for, only on `rows` itself),
+         // so `salesGroupEntries[idx]` is always THIS SAME entity's own Sales of Goods figures —
+         // no label-matching needed, just the same positional `idx`.
+-        const usePerEntitySalesDenom = (def.key === 'claim10PctCogs' || def.key === 'additionalBudgetPromo' || def.key === 'claimVouchers' || def.key === 'totalOpCost')
++        // REVISED 2026-10-19 per Zoltraak: Claim 10% COGS / Additional Budget Promo / Claim Vouchers no longer divide
++        // by THAT entity's own Sales of Goods row — "% Cont. to SoG <division>" = the division's value ÷ the (total)
++        // Sales of Goods row of the SAME column, e.g. `=IFERROR(AQ50/AQ32*100,0)` in the H1 column (the flat
++        // pctContDenominatorRow, same as every other "% Cont. to SoG" row). Total Operational and Fulfillment Cost
++        // keeps its own per-entity denominator (2026-09-16).
++        const usePerEntitySalesDenom = (def.key === 'totalOpCost')
+           && pctContDenominatorRow === salesRow && salesGroupValueGroupStart != null;
+         const salesGroupEntries = usePerEntitySalesDenom ? built.rowBreakdownGroup('sales') : null;
+         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow && pctContDenominatorRow) {
+@@ -3563,6 +3622,7 @@
+         // key), unlike the sales-only capture just above.
+         storeEntityRowStartByKey[def.key] = valueGroupStart;
+         storeEntityCount = breakdownEntries.length;
++        emitPctSogRow();
+ 
+ 
+ 
+@@ -3577,7 +3637,9 @@
+         // the (g2) Group block above, applied here for "Per Period per Warehouse"/"Per Period per
+         // Marketplace" (the only 2 sheets that ever reach this Store-level block with a real
+         // breakdown, since "Per Period per Store" always sets rowBreakdown to null).
+-        const usePerEntitySalesDenom = (def.key === 'claim10PctCogs' || def.key === 'additionalBudgetPromo' || def.key === 'claimVouchers' || def.key === 'totalOpCost')
++        // REVISED 2026-10-19 per Zoltraak — see the (g2) block's matching comment: Claim 10% COGS / Additional Budget
++        // Promo / Claim Vouchers now divide by the Sales of Goods row of the same column (per Warehouse / Marketplace too).
++        const usePerEntitySalesDenom = (def.key === 'totalOpCost')
+           && pctContDenominatorRow === salesRow && salesValueGroupStart != null;
+         const salesEntriesForDenom = usePerEntitySalesDenom ? built.rowBreakdown('sales') : null;
+         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow && pctContDenominatorRow) {
