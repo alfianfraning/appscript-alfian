@@ -2327,10 +2327,10 @@ const EXPORT_PCT_BASE_LABEL = '% Cont. to Total Revenue';
 const EXPORT_PCT_ALSO_SOG_ROW_KEYS = ['absorbBySirclo'];
 // ADDED 2026-10-20 per Zoltraak: a new live-formula line directly under "Total Operational and Fulfillment Cost" —
 // that row divided by the SAME Total Revenue base as every other "% Cont. to Total Revenue" row (EXPORT_PCT_BASE_KEYS),
-// column by column. Written only on the export sheets named here (add 'Per Period per Store' / 'Per Period per
-// Marketplace' to switch it on there too).
-const TOTAL_OPCOST_PCT_SHEETS = ['Per Period per Warehouse'];
-const TOTAL_OPCOST_PCT_LABEL = '% Total Operational and Fulfillment Cost to Total Revenue';
+// column by column. Written on the export sheets named here — first only the Warehouse sheet, extended 2026-10-20 per
+// Zoltraak to all three sheets; remove a sheet name from the list to switch it off there.
+const TOTAL_OPCOST_PCT_SHEETS = ['Per Period per Store', 'Per Period per Warehouse', 'Per Period per Marketplace'];
+const TOTAL_OPCOST_PCT_LABEL = '% Cont. Total Operational and Fulfillment Cost to Total Revenue';
 // ADDED 2026-10-20 per Zoltraak ("hapus baris 167-171"): rows that keep their per-entity VALUE rows but lose the blank
 // spacer + per-entity "% Cont. to SoG <entity>" block beneath them — a per-order money figure divided by Sales of Goods is
 // not a meaningful percentage (same reasoning as % Gross Profit / % Contribution Margin, which never had that block).
