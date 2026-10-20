@@ -1085,7 +1085,9 @@ let RATE_ROW_DEFS = [
 // treatment as Gross Profit/Contribution Margin (expand buttons, hover tooltips, Sheet export),
 // but see METRIC_BREAKDOWN_RATIO_ROW_KEYS just below — they're RATIOS (Gross Profit/Contribution
 // Margin ÷ Number of Order), not summable money amounts, so they're listed there too.
-const METRIC_BREAKDOWN_ROW_KEYS = ['uniq', 'qty', 'sales', 'gp', 'pctGp', 'gpPerOrder', 'totalOpCost', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder'];
+// aov/abs ADDED 2026-10-20 per Zoltraak (export only): Average Order Value / Average Basket Size get a per-store / per-warehouse /
+// per-marketplace breakdown under them in the Sheets export — see EXPORT_NO_ENTITY_PCT_ROW_KEYS and LIVE_FORMULA_BREAKDOWN_KEYS.
+const METRIC_BREAKDOWN_ROW_KEYS = ['uniq', 'qty', 'sales', 'gp', 'pctGp', 'gpPerOrder', 'totalOpCost', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder', 'aov', 'abs'];
 
 const state = {
   // Every store — real and virtual "combined" alike — starts UNSELECTED, so opening the
@@ -2285,7 +2287,9 @@ const EXPORT_FORMULA_ROWS = {
 // (right after the existing EXPORT_FORMULA_ROWS post-pass) for how this is used: each of these 6
 // keys' per-entity breakdown rows gets EXPORT_FORMULA_ROWS[key] re-run with an entity-scoped
 // `rowOf` (component row numbers belonging to THAT SAME entity, not the combined metric row).
-const LIVE_FORMULA_BREAKDOWN_KEYS = ['gp', 'pctGp', 'gpPerOrder', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder'];
+// aov/abs ADDED 2026-10-20: each entity's Average Order Value = that entity's Sales of Goods / Number of Order, Average Basket Size = that
+// entity's Quantity / Number of Order (EXPORT_FORMULA_ROWS.aov/abs re-run on that entity's own rows).
+const LIVE_FORMULA_BREAKDOWN_KEYS = ['aov', 'abs', 'gp', 'pctGp', 'gpPerOrder', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder'];
 
 // ROW_DEFS keys that want the export's plain "% Cont. to SoG" row even though their OWN cellNote
 // isn't a pctOfSalesNote_-tagged function — see buildExportPayload_'s own `plainPctSource` comment.
@@ -2335,7 +2339,8 @@ const TOTAL_OPCOST_PCT_LABEL = '% Cont. Total Operational and Fulfillment Cost t
 // spacer + per-entity "% Cont. to SoG <entity>" block beneath them — a per-order money figure divided by Sales of Goods is
 // not a meaningful percentage (same reasoning as % Gross Profit / % Contribution Margin, which never had that block).
 // Currently only Contribution Margin per Order; add 'gpPerOrder' here to drop the identical block under Gross Profit per Order.
-const EXPORT_NO_ENTITY_PCT_ROW_KEYS = ['cmPerOrder'];
+// aov/abs added 2026-10-20 (their per-entity rows are live ratios, no "% Cont." block).
+const EXPORT_NO_ENTITY_PCT_ROW_KEYS = ['cmPerOrder', 'aov', 'abs'];
 
 // ROW_DEFS keys that get a per-entity VALUE-ONLY breakdown (Warehouse/Store/Marketplace, matching
 // whichever dimension the current sheet is — same as Sales of Goods/Gross Profit etc. already get)
@@ -3179,7 +3184,7 @@ function buildExportPayload_(rows, opts) {
         const valueGroupStart = sheetRow;
         breakdownEntries.forEach(entry => {
           rowLabels.push('   ' + entry.label); // indented — a plain "this is a sub-row" cue.
-          rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
+          rowFormats.push(def.key === 'abs' ? EXPORT_NUMBER_FORMAT.decimal : (EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0')); // Average Basket Size keeps its 2 decimals
           rowIsBold.push(false);
           // entry.values was built against `built.rowBreakdown`'s OWN (pre-entity-column-breakdown)
           // period-column list — remap each value onto its new position via origToNewIdx (see that
@@ -3378,7 +3383,9 @@ function buildExportPayload_(rows, opts) {
     // Average Basket Size all sit consecutively at the very top of every sheet — see OUTRIGHT_
     // ROW_DEFS' idx 1-4), independent of g1's own dashboard-only show/hide behavior.
     if (rowNumberByKey.uniq != null && rowNumberByKey.abs != null) {
-      rowGroups.push({ start: rowNumberByKey.uniq, end: rowNumberByKey.abs });
+      // The master group now also covers Average Basket Size's own per-entity rows when it has them.
+      const absLastRow = storeEntityRowStartByKey.abs != null ? storeEntityRowStartByKey.abs + storeEntityCount - 1 : rowNumberByKey.abs;
+      rowGroups.push({ start: rowNumberByKey.uniq, end: Math.max(rowNumberByKey.abs, absLastRow) });
     }
 
     dataRowDefs.forEach(def => {
