@@ -1,0 +1,73 @@
+--- Engine_prev.gs
++++ Engine.gs
+@@ -1229,7 +1229,9 @@
+ // exact same +W/+S/+M breakdown (by value AND by % Contribution to SoG) as Additional Budget Promo,
+ // on both the plain Claim Vouchers row and its own "% Contribution to SoG" toggle row. Only
+ // claim10PctCogsPctSog stays excluded (never asked for).
+-const METRIC_BREAKDOWN_ROW_KEYS = ['uniq', 'qty', 'sales', 'gp', 'pctGp', 'gpPerOrder', 'totalOpCost', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder', 'claim10PctCogs', 'additionalBudgetPromo', 'additionalBudgetPromoPctSog', 'claimVouchers', 'claimVouchersPctSog'];
++const METRIC_BREAKDOWN_ROW_KEYS = ['uniq', 'qty', 'sales', 'gp', 'pctGp', 'gpPerOrder', 'totalOpCost', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder', 'claim10PctCogs', 'additionalBudgetPromo', 'additionalBudgetPromoPctSog', 'claimVouchers', 'claimVouchersPctSog', 'aov', 'abs'];
++// aov/abs ADDED 2026-10-20 per Zoltraak (export only): Average Order Value / Average Basket Size get a per-division / per-store /
++// per-warehouse / per-marketplace breakdown under them in the Sheets export (ratio rows: no "% Cont." block, live per-entity formulas).
+ 
+ const state = {
+   // Every store — real and virtual "combined" alike — starts UNSELECTED, so opening the
+@@ -2493,7 +2495,9 @@
+ // contributionMargin's formula but was NOT asked to become a live formula itself, so it's
+ // deliberately left out of this list — its own breakdown row stays a plain number, exactly as
+ // before; contributionMargin's formula just points AT that plain-number cell, which works fine.
+-const LIVE_FORMULA_BREAKDOWN_KEYS = ['gp', 'pctGp', 'gpPerOrder', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder'];
++// aov/abs ADDED 2026-10-20: each entity's Average Order Value = that entity's Sales of Goods / Number of Order, Average Basket Size = that
++// entity's Quantity / Number of Order (EXPORT_FORMULA_ROWS.aov/abs re-run on that entity's own rows).
++const LIVE_FORMULA_BREAKDOWN_KEYS = ['aov', 'abs', 'gp', 'pctGp', 'gpPerOrder', 'contributionMargin', 'pctContributionMargin', 'cmPerOrder'];
+ 
+ // ROW_DEFS keys that want the export's plain "% Cont. to SoG" row even though their OWN cellNote
+ // isn't a pctOfSalesNote_-tagged function — see buildExportPayload_'s own `plainPctSource` comment.
+@@ -2744,7 +2748,7 @@
+       // OF it would be a meaningless percent-of-a-percent (same reasoning as METRIC_BREAKDOWN_
+       // RATIO_ROW_KEYS' own comment). claimVouchersPctSog joins 2026-09-16 for the exact same reason,
+       // alongside claimVouchers itself newly joining METRIC_BREAKDOWN_ROW_KEYS.
+-      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin' || def.key === 'gpPerOrder' || def.key === 'cmPerOrder' || def.key === 'additionalBudgetPromoPctSog' || def.key === 'claimVouchersPctSog';
++      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin' || def.key === 'gpPerOrder' || def.key === 'cmPerOrder' || def.key === 'additionalBudgetPromoPctSog' || def.key === 'claimVouchersPctSog' || def.key === 'aov' || def.key === 'abs';
+       const isValueOnlyBreakdownRow = EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
+       // Group-level block row count — ADDED 2026-09-16, mirrors the main pass' own `(g1)/(g2)` block
+       // (see its comment there) so rowNumberByKey stays accurate for every row that references it.
+@@ -3421,7 +3425,7 @@
+       // gpPerOrder/cmPerOrder/additionalBudgetPromoPctSog ADDED 2026-09-15 per Zoltraak — same
+       // reasoning as the pre-pass' own comment on this. claimVouchersPctSog joins 2026-09-16 (see
+       // the pre-pass' own comment).
+-      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin' || def.key === 'gpPerOrder' || def.key === 'cmPerOrder' || def.key === 'additionalBudgetPromoPctSog' || def.key === 'claimVouchersPctSog';
++      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin' || def.key === 'gpPerOrder' || def.key === 'cmPerOrder' || def.key === 'additionalBudgetPromoPctSog' || def.key === 'claimVouchersPctSog' || def.key === 'aov' || def.key === 'abs';
+       // Value-only-breakdown rows (Rebates, Other Revenue, COGS, Surplus, MOGTM Distributor Fee,
+       // Promo Fund Front/Back Margin — added 2026-08-27 per Zoltraak) — see
+       // EXPORT_VALUE_ONLY_BREAKDOWN_KEYS' own comment for why these get breakdown VALUE rows (a1)
+@@ -3547,7 +3551,7 @@
+         const groupValueGroupStart = sheetRow;
+         groupBreakdownEntries.forEach(entry => {
+           rowLabels.push('   ' + entry.label);
+-          rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
++          rowFormats.push(def.key === 'abs' ? EXPORT_NUMBER_FORMAT.decimal : (EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0')); // Average Basket Size keeps its 2 decimals
+           rowIsBold.push(false);
+           const remapped = new Array(columns.length).fill(0);
+           const highlightArr = new Array(columns.length).fill(null);
+@@ -3667,7 +3671,7 @@
+         const valueGroupStart = sheetRow;
+         breakdownEntries.forEach(entry => {
+           rowLabels.push('   ' + entry.label); // indented — a plain "this is a sub-row" cue.
+-          rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
++          rowFormats.push(def.key === 'abs' ? EXPORT_NUMBER_FORMAT.decimal : (EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0')); // Average Basket Size keeps its 2 decimals
+           rowIsBold.push(false);
+           // entry.values was built against `built.rowBreakdown`'s OWN (pre-entity-column-breakdown)
+           // period-column list — remap each value onto its new position via origToNewIdx (see that
+@@ -3902,7 +3906,11 @@
+     // Average Basket Size all sit consecutively at the very top of every sheet — see OUTRIGHT_
+     // ROW_DEFS' idx 1-4), independent of g1's own dashboard-only show/hide behavior.
+     if (rowNumberByKey.uniq != null && rowNumberByKey.abs != null) {
+-      rowGroups.push({ start: rowNumberByKey.uniq, end: rowNumberByKey.abs });
++      // The master group now also covers Average Basket Size's own per-entity rows (Group-level and Store-level blocks) when it has them.
++      const absLastRow = Math.max(rowNumberByKey.abs,
++        groupEntityRowStartByKey.abs != null ? groupEntityRowStartByKey.abs + groupEntityCount - 1 : 0,
++        storeEntityRowStartByKey.abs != null ? storeEntityRowStartByKey.abs + storeEntityCount - 1 : 0);
++      rowGroups.push({ start: rowNumberByKey.uniq, end: absLastRow });
+     }
+ 
+ 
