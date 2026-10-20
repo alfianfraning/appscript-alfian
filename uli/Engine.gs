@@ -2132,6 +2132,11 @@ function withEntityColumnBreakdown_(built, rows, aggregatorFn, labelField, gateF
     columns.push(c);
     origToNewIdx.push(newStart);
     const entities = entityLists[origIdx];
+    // A period column with exactly ONE entity gets no entity sub-columns (see the length check just below). Remember which
+    // entity that was, so the per-entity formulas that walk several period columns (entityCellIdx_ in buildExportPayload_:
+    // quarter/half roll-up sums, % Move, % Run Rate) can use that period column's own figure for that entity instead of
+    // treating the period as "entity absent" — which silently dropped e.g. April and May from a "KLOG Benoa" Q2 total.
+    if (entities.length === 1) c.soleEntityLabel = entities[0][labelField];
     if (entities.length > 1) {
       const periodRows = rows.filter(r => c.months.includes(r.month));
       // Computed once per entity (not once per entity PER downstream use — pushed here, then read
@@ -3010,15 +3015,24 @@ function buildExportPayload_(rows, opts) {
     // (not a formula) when there's no comparable previous period at all, OR when this specific
     // entity had no data in that previous period — same "no earlier data -> 0%" convention
     // moveFormula_ and runRateFormula_ already use.
+    // Column index holding `entityLabel`'s own figure for the (non-entity) period column `pIdx`: that entity's sub-column
+    // when the period has one; the period column itself when this entity was the period's ONLY entity (no sub-columns were
+    // added — see soleEntityLabel in withEntityColumnBreakdown_); -1 when the entity is absent that period.
+    function entityCellIdx_(pIdx, entityLabel) {
+      if (entityLabel === null) return pIdx;
+      const children = entityChildrenByParent[pIdx];
+      const eIdx = children ? children[entityLabel] : undefined;
+      if (eIdx !== undefined) return eIdx;
+      return columns[pIdx] && columns[pIdx].soleEntityLabel === entityLabel ? pIdx : -1;
+    }
     function moveFormulaGeneric_(curIdx, metricRow) {
       const parentIdx = parentColIdx_(curIdx);
       const prevParentIdx = prevParentIdx_(parentIdx);
       if (prevParentIdx < 0) return 0;
       let prevIdx;
       if (columns[curIdx].isEntityBreakdown) {
-        const children = entityChildrenByParent[prevParentIdx];
-        prevIdx = children ? children[columns[curIdx].label] : undefined;
-        if (prevIdx === undefined) return 0;
+        prevIdx = entityCellIdx_(prevParentIdx, columns[curIdx].label);
+        if (prevIdx < 0) return 0;
       } else {
         prevIdx = prevParentIdx;
       }
@@ -3038,9 +3052,8 @@ function buildExportPayload_(rows, opts) {
       const curVal = (columns[curIdx].data && columns[curIdx].data[metricKey]) || 0;
       let prevVal;
       if (columns[curIdx].isEntityBreakdown) {
-        const children = entityChildrenByParent[prevParentIdx];
-        const prevIdx = children ? children[columns[curIdx].label] : undefined;
-        if (prevIdx === undefined) return 0;
+        const prevIdx = entityCellIdx_(prevParentIdx, columns[curIdx].label);
+        if (prevIdx < 0) return 0;
         prevVal = (columns[prevIdx].data && columns[prevIdx].data[metricKey]) || 0;
       } else {
         prevVal = (columns[prevParentIdx].data && columns[prevParentIdx].data[metricKey]) || 0;
@@ -3122,13 +3135,8 @@ function buildExportPayload_(rows, opts) {
     function sumCellsExpr_(parentIdxs, metricRow, entityLabel) {
       const parts = [];
       parentIdxs.forEach(pIdx => {
-        let cellIdx = pIdx;
-        if (entityLabel !== null) {
-          const children = entityChildrenByParent[pIdx];
-          const eIdx = children ? children[entityLabel] : undefined;
-          if (eIdx === undefined) return;
-          cellIdx = eIdx;
-        }
+        const cellIdx = entityCellIdx_(pIdx, entityLabel);
+        if (cellIdx < 0) return;
         parts.push(colLetters[cellIdx] + metricRow);
       });
       return parts.length ? parts.join('+') : '0';
@@ -3160,13 +3168,9 @@ function buildExportPayload_(rows, opts) {
       const entityLabel = c.isEntityBreakdown ? c.label : null;
       let qtdSales = 0;
       monthIdxs.forEach(pIdx => {
-        let dataCol = columns[pIdx];
-        if (entityLabel !== null) {
-          const children = entityChildrenByParent[pIdx];
-          const eIdx = children ? children[entityLabel] : undefined;
-          if (eIdx === undefined) return;
-          dataCol = columns[eIdx];
-        }
+        const cellIdx = entityCellIdx_(pIdx, entityLabel);
+        if (cellIdx < 0) return;
+        const dataCol = columns[cellIdx];
         qtdSales += (dataCol.data && dataCol.data.sales) || 0;
       });
       const curVal = (c.data && c.data.sales) || 0;
@@ -3202,13 +3206,9 @@ function buildExportPayload_(rows, opts) {
       const entityLabel = c.isEntityBreakdown ? c.label : null;
       let prevSales = 0;
       monthIdxs.forEach(pIdx => {
-        let dataCol = columns[pIdx];
-        if (entityLabel !== null) {
-          const children = entityChildrenByParent[pIdx];
-          const eIdx = children ? children[entityLabel] : undefined;
-          if (eIdx === undefined) return;
-          dataCol = columns[eIdx];
-        }
+        const cellIdx = entityCellIdx_(pIdx, entityLabel);
+        if (cellIdx < 0) return;
+        const dataCol = columns[cellIdx];
         prevSales += (dataCol.data && dataCol.data.sales) || 0;
       });
       const curVal = (c.data && c.data.sales) || 0;

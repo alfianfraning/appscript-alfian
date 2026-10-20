@@ -61,7 +61,19 @@
  // Grand Total broken down by MARKETPLACE — only meaningful on the Consignment tab (that's the only
  // place rows carry a `.marketplaces` breakdown). Same shape/aggregation as
  // computeGrandWarehouses, just reading r.marketplaces instead of r.warehouses, so every metric row
-@@ -2308,7 +2341,7 @@
+@@ -2099,6 +2132,11 @@
+     columns.push(c);
+     origToNewIdx.push(newStart);
+     const entities = entityLists[origIdx];
++    // A period column with exactly ONE entity gets no entity sub-columns (see the length check just below). Remember which
++    // entity that was, so the per-entity formulas that walk several period columns (entityCellIdx_ in buildExportPayload_:
++    // quarter/half roll-up sums, % Move, % Run Rate) can use that period column's own figure for that entity instead of
++    // treating the period as "entity absent" — which silently dropped e.g. April and May from a "KLOG Benoa" Q2 total.
++    if (entities.length === 1) c.soleEntityLabel = entities[0][labelField];
+     if (entities.length > 1) {
+       const periodRows = rows.filter(r => c.months.includes(r.month));
+       // Computed once per entity (not once per entity PER downstream use — pushed here, then read
+@@ -2308,7 +2346,7 @@
    },
    {
      sheetName: 'Per Period per Warehouse',
@@ -70,7 +82,7 @@
    },
    {
      sheetName: 'Per Period per Marketplace',
-@@ -2486,6 +2519,12 @@
+@@ -2486,6 +2524,12 @@
  // SIRCLO. Every other row in EXPORT_PCT_OF_BASE_ROW_KEYS has its single "% Cont." row switched to the
  // Total Revenue base (label + denominator) instead.
  const EXPORT_PCT_ALSO_SOG_ROW_KEYS = ['absorbBySirclo'];
@@ -83,7 +95,7 @@
  
  // ROW_DEFS keys that get a per-entity VALUE-ONLY breakdown (Warehouse/Store/Marketplace, matching
  // whichever dimension the current sheet is — same as Sales of Goods/Gross Profit etc. already get)
-@@ -2690,6 +2729,7 @@
+@@ -2690,6 +2734,7 @@
        if (PCT_SOG_ROW_KEYS.includes(def.key)) return; // placed by its parent's iteration — see PCT_SOG_ROW_BY_PARENT
        rowNumberByKey[def.key] = preSheetRow;
        preSheetRow += 1;
@@ -91,6 +103,96 @@
        const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
        // gpPerOrder/cmPerOrder ADDED 2026-09-15 per Zoltraak ("hapuskan %Cont to SoG yang ada dibawah
        // line gross profit per order") — a per-ORDER dollar figure divided by Sales of Goods (a
+@@ -2970,15 +3015,24 @@
+     // (not a formula) when there's no comparable previous period at all, OR when this specific
+     // entity had no data in that previous period — same "no earlier data -> 0%" convention
+     // moveFormula_ and runRateFormula_ already use.
++    // Column index holding `entityLabel`'s own figure for the (non-entity) period column `pIdx`: that entity's sub-column
++    // when the period has one; the period column itself when this entity was the period's ONLY entity (no sub-columns were
++    // added — see soleEntityLabel in withEntityColumnBreakdown_); -1 when the entity is absent that period.
++    function entityCellIdx_(pIdx, entityLabel) {
++      if (entityLabel === null) return pIdx;
++      const children = entityChildrenByParent[pIdx];
++      const eIdx = children ? children[entityLabel] : undefined;
++      if (eIdx !== undefined) return eIdx;
++      return columns[pIdx] && columns[pIdx].soleEntityLabel === entityLabel ? pIdx : -1;
++    }
+     function moveFormulaGeneric_(curIdx, metricRow) {
+       const parentIdx = parentColIdx_(curIdx);
+       const prevParentIdx = prevParentIdx_(parentIdx);
+       if (prevParentIdx < 0) return 0;
+       let prevIdx;
+       if (columns[curIdx].isEntityBreakdown) {
+-        const children = entityChildrenByParent[prevParentIdx];
+-        prevIdx = children ? children[columns[curIdx].label] : undefined;
+-        if (prevIdx === undefined) return 0;
++        prevIdx = entityCellIdx_(prevParentIdx, columns[curIdx].label);
++        if (prevIdx < 0) return 0;
+       } else {
+         prevIdx = prevParentIdx;
+       }
+@@ -2998,9 +3052,8 @@
+       const curVal = (columns[curIdx].data && columns[curIdx].data[metricKey]) || 0;
+       let prevVal;
+       if (columns[curIdx].isEntityBreakdown) {
+-        const children = entityChildrenByParent[prevParentIdx];
+-        const prevIdx = children ? children[columns[curIdx].label] : undefined;
+-        if (prevIdx === undefined) return 0;
++        const prevIdx = entityCellIdx_(prevParentIdx, columns[curIdx].label);
++        if (prevIdx < 0) return 0;
+         prevVal = (columns[prevIdx].data && columns[prevIdx].data[metricKey]) || 0;
+       } else {
+         prevVal = (columns[prevParentIdx].data && columns[prevParentIdx].data[metricKey]) || 0;
+@@ -3082,13 +3135,8 @@
+     function sumCellsExpr_(parentIdxs, metricRow, entityLabel) {
+       const parts = [];
+       parentIdxs.forEach(pIdx => {
+-        let cellIdx = pIdx;
+-        if (entityLabel !== null) {
+-          const children = entityChildrenByParent[pIdx];
+-          const eIdx = children ? children[entityLabel] : undefined;
+-          if (eIdx === undefined) return;
+-          cellIdx = eIdx;
+-        }
++        const cellIdx = entityCellIdx_(pIdx, entityLabel);
++        if (cellIdx < 0) return;
+         parts.push(colLetters[cellIdx] + metricRow);
+       });
+       return parts.length ? parts.join('+') : '0';
+@@ -3120,13 +3168,9 @@
+       const entityLabel = c.isEntityBreakdown ? c.label : null;
+       let qtdSales = 0;
+       monthIdxs.forEach(pIdx => {
+-        let dataCol = columns[pIdx];
+-        if (entityLabel !== null) {
+-          const children = entityChildrenByParent[pIdx];
+-          const eIdx = children ? children[entityLabel] : undefined;
+-          if (eIdx === undefined) return;
+-          dataCol = columns[eIdx];
+-        }
++        const cellIdx = entityCellIdx_(pIdx, entityLabel);
++        if (cellIdx < 0) return;
++        const dataCol = columns[cellIdx];
+         qtdSales += (dataCol.data && dataCol.data.sales) || 0;
+       });
+       const curVal = (c.data && c.data.sales) || 0;
+@@ -3162,13 +3206,9 @@
+       const entityLabel = c.isEntityBreakdown ? c.label : null;
+       let prevSales = 0;
+       monthIdxs.forEach(pIdx => {
+-        let dataCol = columns[pIdx];
+-        if (entityLabel !== null) {
+-          const children = entityChildrenByParent[pIdx];
+-          const eIdx = children ? children[entityLabel] : undefined;
+-          if (eIdx === undefined) return;
+-          dataCol = columns[eIdx];
+-        }
++        const cellIdx = entityCellIdx_(pIdx, entityLabel);
++        if (cellIdx < 0) return;
++        const dataCol = columns[cellIdx];
+         prevSales += (dataCol.data && dataCol.data.sales) || 0;
+       });
+       const curVal = (c.data && c.data.sales) || 0;
 @@ -3480,6 +3520,26 @@
          sheetRow += 1;
        };
