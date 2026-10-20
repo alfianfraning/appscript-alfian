@@ -2526,10 +2526,10 @@ const EXPORT_PCT_BASE_LABEL = '% Cont. to Total Revenue';
 const EXPORT_PCT_ALSO_SOG_ROW_KEYS = ['absorbBySirclo'];
 // ADDED 2026-10-20 per Zoltraak: a new live-formula line directly under "Total Operational and Fulfillment Cost" —
 // that row divided by the SAME Total Revenue base as every other "% Cont. to Total Revenue" row (EXPORT_PCT_BASE_KEYS),
-// column by column. Written only on the export sheets named here (add 'Per Period per Store' / 'Per Period per
-// Marketplace' to switch it on there too).
-const TOTAL_OPCOST_PCT_SHEETS = ['Per Period per Warehouse'];
-const TOTAL_OPCOST_PCT_LABEL = '% Total Operational and Fulfillment Cost to Total Revenue';
+// column by column. Written on the export sheets named here — first only the Warehouse sheet, extended 2026-10-20 per
+// Zoltraak to all three sheets; remove a sheet name from the list to switch it off there.
+const TOTAL_OPCOST_PCT_SHEETS = ['Per Period per Store', 'Per Period per Warehouse', 'Per Period per Marketplace'];
+const TOTAL_OPCOST_PCT_LABEL = '% Cont. Total Operational and Fulfillment Cost to Total Revenue';
 
 // ROW_DEFS keys that get a per-entity VALUE-ONLY breakdown (Warehouse/Store/Marketplace, matching
 // whichever dimension the current sheet is — same as Sales of Goods/Gross Profit etc. already get)
