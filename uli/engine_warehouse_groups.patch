@@ -1,0 +1,120 @@
+--- Engine_orig.gs
++++ Engine.gs
+@@ -1383,11 +1383,14 @@
+ // "Storaflow (KNS)" grand entry, same way the main Grand Total sums every row's overall totals.
+ // Only computed/shown while Grand Total's own toggle (state.grandExpand) is set to 'wh' — see
+ // toggleGrandExpand and renderTable.
+-function computeGrandWarehouses(rows) {
++// `nameFn` (optional) maps a raw warehouse name onto the bucket it is summed into — used by the export's
++// "Per Period per Warehouse" sheet (computeGrandWarehouseGroups below); every other caller passes nothing and gets
++// one bucket per raw warehouse name exactly as before.
++function computeGrandWarehouses(rows, nameFn) {
+   const map = {};
+   rows.forEach(r => {
+     (r.warehouses || []).forEach(w => {
+-      const name = w.warehouse || '(No Warehouse)';
++      const name = (nameFn ? nameFn(w.warehouse) : w.warehouse) || '(No Warehouse)';
+       if (!map[name]) {
+         // otherRevenue/surplus/promoFundFrontMargin/promoFundBackMargin added 2026-08-27 per
+         // Zoltraak's per-category breakdown request for Rebates/Other Revenue/COGS/Surplus/MOGTM
+@@ -1411,6 +1414,13 @@
+ 
+ 
+       PLATFORM_FEE_SUM_KEYS.forEach(k => { m[k] += w[k] || 0; });
++      if (nameFn) {
++        // A grouped bucket (e.g. "MOGTM") has no single warehouse name to look a rate up by, so its MOGTM Distributor Fee
++        // is summed from each underlying warehouse's own fee (their own per-warehouse rates) instead of being derived from
++        // the bucket's name — deriveMetrics leaves an already-numeric mogtmFee alone.
++        m.mogtmFee = (m.mogtmFee || 0) + warehouseMogtmFee(w);
++        m._mogtmRbp = (m._mogtmRbp || 0) + (warehousePrefix(w.warehouse) === 'mogtm' ? (w.rbp || 0) : 0);
++      }
+     });
+   });
+   const list = Object.keys(map).map(k => map[k]);
+@@ -1423,6 +1433,29 @@
+   return list;
+ }
+ 
++// Warehouse grouping for the export's "Per Period per Warehouse" sheet — ADDED 2026-10-20 per Zoltraak: warehouses are
++// grouped by the START of their name (case-insensitive): Benoa... -> "KLOG Benoa", Surabaya... -> "KLOG Surabaya",
++// TMS... -> "TMS", BKS... -> "BKS", MOGTM... -> "MOGTM". Any other warehouse keeps its own name. Everything else about
++// the sheet (columns, rows, formulas) is unchanged — the buckets just hold the summed figures of every warehouse in them.
++const EXPORT_WAREHOUSE_GROUPS = [
++  { prefix: 'benoa', label: 'KLOG Benoa' },
++  { prefix: 'surabaya', label: 'KLOG Surabaya' },
++  { prefix: 'tms', label: 'TMS' },
++  { prefix: 'bks', label: 'BKS' },
++  { prefix: 'mogtm', label: 'MOGTM' },
++];
++function exportWarehouseGroupName_(raw) {
++  const s = String(raw || '').trim();
++  const lower = s.toLowerCase();
++  for (let i = 0; i < EXPORT_WAREHOUSE_GROUPS.length; i++) {
++    if (lower.indexOf(EXPORT_WAREHOUSE_GROUPS[i].prefix) === 0) return EXPORT_WAREHOUSE_GROUPS[i].label;
++  }
++  return s;
++}
++function computeGrandWarehouseGroups(rows) {
++  return computeGrandWarehouses(rows, exportWarehouseGroupName_);
++}
++
+ // Grand Total broken down by MARKETPLACE — only meaningful on the Consignment tab (that's the only
+ // place rows carry a `.marketplaces` breakdown). Same shape/aggregation as
+ // computeGrandWarehouses, just reading r.marketplaces instead of r.warehouses, so every metric row
+@@ -2308,7 +2341,7 @@
+   },
+   {
+     sheetName: 'Per Period per Warehouse',
+-    getColumns: (rows) => buildPerPeriodEntitySheet_(rows, computeGrandWarehouses, 'warehouse'),
++    getColumns: (rows) => buildPerPeriodEntitySheet_(rows, computeGrandWarehouseGroups, 'warehouse'),
+   },
+   {
+     sheetName: 'Per Period per Marketplace',
+@@ -2486,6 +2519,12 @@
+ // SIRCLO. Every other row in EXPORT_PCT_OF_BASE_ROW_KEYS has its single "% Cont." row switched to the
+ // Total Revenue base (label + denominator) instead.
+ const EXPORT_PCT_ALSO_SOG_ROW_KEYS = ['absorbBySirclo'];
++// ADDED 2026-10-20 per Zoltraak: a new live-formula line directly under "Total Operational and Fulfillment Cost" —
++// that row divided by the SAME Total Revenue base as every other "% Cont. to Total Revenue" row (EXPORT_PCT_BASE_KEYS),
++// column by column. Written only on the export sheets named here (add 'Per Period per Store' / 'Per Period per
++// Marketplace' to switch it on there too).
++const TOTAL_OPCOST_PCT_SHEETS = ['Per Period per Warehouse'];
++const TOTAL_OPCOST_PCT_LABEL = '% Total Operational and Fulfillment Cost to Total Revenue';
+ 
+ // ROW_DEFS keys that get a per-entity VALUE-ONLY breakdown (Warehouse/Store/Marketplace, matching
+ // whichever dimension the current sheet is — same as Sales of Goods/Gross Profit etc. already get)
+@@ -2690,6 +2729,7 @@
+       if (PCT_SOG_ROW_KEYS.includes(def.key)) return; // placed by its parent's iteration — see PCT_SOG_ROW_BY_PARENT
+       rowNumberByKey[def.key] = preSheetRow;
+       preSheetRow += 1;
++      if (def.key === 'totalOpCost' && TOTAL_OPCOST_PCT_SHEETS.includes(dim.sheetName)) preSheetRow += 1; // the new "% ... to Total Revenue" line right under it
+       const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
+       // gpPerOrder/cmPerOrder ADDED 2026-09-15 per Zoltraak ("hapuskan %Cont to SoG yang ada dibawah
+       // line gross profit per order") — a per-ORDER dollar figure divided by Sales of Goods (a
+@@ -3480,6 +3520,26 @@
+         sheetRow += 1;
+       };
+       if (!hasRealGroupBreakdown && !hasRealBreakdown) emitPctSogRow();
++      // New line directly under Total Operational and Fulfillment Cost (see TOTAL_OPCOST_PCT_SHEETS): live formula =
++      // this column's Total Operational and Fulfillment Cost / this column's Total Revenue base. Written above the
++      // entity value rows, outside any collapse group, so it is always visible.
++      if (def.key === 'totalOpCost' && TOTAL_OPCOST_PCT_SHEETS.includes(dim.sheetName)) {
++        const opCostRow = rowNumberByKey.totalOpCost;
++        rowLabels.push('   ' + TOTAL_OPCOST_PCT_LABEL);
++        rowFormats.push(EXPORT_NUMBER_FORMAT.pct);
++        rowIsBold.push(false);
++        const opCostPctRaw = columns.map(c => {
++          const base = pctBaseRaw_(c);
++          return base ? (((c.data && c.data.totalOpCost) || 0) / base) * 100 : 0;
++        });
++        values.push(columns.map((c, colIdx) => {
++          const colLetter = columnLetter_(colIdx + 3);
++          const baseExpr = pctBaseExpr_(colLetter);
++          return baseExpr ? `=IFERROR(${colLetter}${opCostRow}/${baseExpr}*100,0)` : opCostPctRaw[colIdx];
++        }));
++        rowHighlights.push(computeHighlightCols_(opCostPctRaw));
++        sheetRow += 1;
++      }
+ 
+       if (hasRealGroupBreakdown) {
+         // (g1) Group-level plain breakdown VALUE rows — see (a1) below for the full explanation this

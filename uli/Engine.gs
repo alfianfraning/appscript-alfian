@@ -465,7 +465,13 @@ function deriveMetrics(r, isConsignment) {
   // sums r.claim from rows that have already been through this function, so zeroing it here cascades
   // to $0 everywhere automatically without touching any of those ~15 individual summing sites.
   const claimBasedOnSellOut = (r.claim10PctCogs || 0) + (r.additionalBudgetPromo || 0) + (r.claimVouchers || 0);
-  r.claim = 0;
+  // REVISED 2026-10-19 per Zoltraak ("untuk line Gross Profit, %Gross Profit, Contribution Margin, %Contribution Margin
+  // tolong adapt dari L'Oreal"; chosen option "Rebates = total 3 claim sell-out"): Rebates now DISPLAYS the total of the 3
+  // Claim based on Sell Out rows (it is no longer forced to 0), and Gross Profit / % Gross Profit / Contribution Margin /
+  // % Contribution Margin below use the plain Rebates term exactly like the LOreal fork (Sales of Goods + Rebates ...).
+  // Numerically identical to the 2026-09-15 version (Rebates == the sum of the 3 rows), so nothing is double counted as long
+  // as Rebates and the 3 rows are never BOTH added anywhere (see EXPORT_PCT_BASE_KEYS' comment for the one place that did).
+  r.claim = claimBasedOnSellOut;
   // % Contribution to SoG (Sales of Goods) — added 2026-09-15 per Zoltraak, one dedicated row per
   // Claim 10% COGS / Additional Budget Promo / Claim Vouchers (own toggle each, see
   // claim10PctCogsPctSog/additionalBudgetPromoPctSog/claimVouchersPctSog in OUTRIGHT_ROW_DEFS): this
@@ -478,8 +484,8 @@ function deriveMetrics(r, isConsignment) {
   r.claim10PctCogsPctSog = r.sales ? ((r.claim10PctCogs || 0) / r.sales) * 100 : 0;
   r.additionalBudgetPromoPctSog = r.sales ? ((r.additionalBudgetPromo || 0) / r.sales) * 100 : 0;
   r.claimVouchersPctSog = r.sales ? ((r.claimVouchers || 0) / r.sales) * 100 : 0;
-  r.gp = r.sales + claimBasedOnSellOut + (r.otherRevenue || 0) - r.rbp - (r.surplus || 0) - r.mogtmFee - (r.promoFundFrontMargin || 0) - (r.promoFundBackMargin || 0);
-  r.pctGp = (r.sales + claimBasedOnSellOut) ? (r.gp / (r.sales + claimBasedOnSellOut)) * 100 : 0;
+  r.gp = r.sales + r.claim + (r.otherRevenue || 0) - r.rbp - (r.surplus || 0) - r.mogtmFee - (r.promoFundFrontMargin || 0) - (r.promoFundBackMargin || 0);
+  r.pctGp = (r.sales + r.claim) ? (r.gp / (r.sales + r.claim)) * 100 : 0;
   // Gross Profit per Order — added 2026-09-12 per Zoltraak: Gross Profit ÷ Number of Order, same
   // "|| 0 on zero denominator" convention as aov/pctGp above. A RATIO (like pctGp), not a summable
   // money amount — see computeOrderRatioTotals's own comment for why its Total/Half/Quarter and
@@ -517,7 +523,7 @@ function deriveMetrics(r, isConsignment) {
   // Margin follows the same "as a % of (Sales of Goods + Rebates)" treatment % Gross Profit above
   // already uses. Both shown right after Total Operational and Fulfillment Cost — see ROW_DEFS.
   r.contributionMargin = r.gp - r.totalOpCost;
-  r.pctContributionMargin = (r.sales + claimBasedOnSellOut) ? (r.contributionMargin / (r.sales + claimBasedOnSellOut)) * 100 : 0;
+  r.pctContributionMargin = (r.sales + r.claim) ? (r.contributionMargin / (r.sales + r.claim)) * 100 : 0;
   // Contribution Margin per Order — added 2026-09-12 per Zoltraak, same shape/rationale as
   // gpPerOrder above (Contribution Margin ÷ Number of Order, a ratio not a summable amount).
   r.cmPerOrder = r.uniq ? r.contributionMargin / r.uniq : 0;
@@ -742,7 +748,7 @@ const OUTRIGHT_ROW_DEFS = [
   // ("revised the button expand collapse from line rebates, to line Claim based on Sell Out") — see
   // the new "claimBasedOnSellOut" divider row directly below, which now anchors g5 instead. Rebates
   // itself stays a plain member of g2 (Rebates/COGS/MOGTM), same as before g5 ever existed.
-  { key: "claim",   idx: 7,  tag: "Claim",                   formula: "(RRP - CBP)",                                     fmt: "money", section: "", group: "g2",
+  { key: "claim",   idx: 7,  tag: "Claim",                   formula: "(Claim 10% COGS + Additional Budget Promo + Claim Vouchers)",                                     fmt: "money", section: "", group: "g2",
     cellNote: pctOfSalesNote_('claim') },
   // New blank divider row added 2026-08-31 (third round) per Zoltraak ("add blank line after
   // Rebates, name it: Claim based on Sell Out" + "revised the button expand collapse from line
@@ -964,7 +970,7 @@ const OUTRIGHT_ROW_DEFS = [
   // formula text REVISED 2026-09-15 per Zoltraak: Rebates is now always $0 (redundant with the 3
   // "Claim based on Sell Out" rows below it — see deriveMetrics' own comment), so this display text
   // (and the live calculation) now names "Claim based on Sell Out" instead of "Rebates".
-  { key: "gp",      idx: 11,  label: "Gross Profit",          formula: "(Sales of Goods + Claim based on Sell Out + Other Revenue - COGS - Surplus - Promo Fund Front Margin - Promo Fund Back Margin - MOGTM Distributor Fee)", fmt: "money", section: "gp",
+  { key: "gp",      idx: 11,  label: "Gross Profit",          formula: "(Sales of Goods + Rebates + Other Revenue - COGS - Surplus - Promo Fund Front Margin - Promo Fund Back Margin - MOGTM Distributor Fee)", fmt: "money", section: "gp",
     cellTitle: (data, ctx) => gpTooltipText(data, ctx) },
   // formula text SIMPLIFIED 2026-08-31 per Zoltraak ("the grey color writings at % gross profit
   // revised to : Gross Profit / (Sales of Goods + Rebates)") — was the full expanded Gross Profit
@@ -973,7 +979,7 @@ const OUTRIGHT_ROW_DEFS = [
   // change — pctGp's actual VALUE (deriveMetrics/computeGrand's r.pctGp/g.pctGp) is unaffected.
   // REVISED 2026-09-15: denominator renamed Rebates -> Claim based on Sell Out, same reason as the
   // Gross Profit row's own formula text above.
-  { key: "pctGp",   idx: 12, label: "% Gross Profit",        formula: "Gross Profit / (Sales of Goods + Claim based on Sell Out)", fmt: "pct", section: "", groupToggle: "g3",
+  { key: "pctGp",   idx: 12, label: "% Gross Profit",        formula: "Gross Profit / (Sales of Goods + Rebates)", fmt: "pct", section: "", groupToggle: "g3",
     cellTitle: (data, ctx) => pctGpTooltipText(data, ctx) },
   // Blank divider row added 2026-09-16 per Zoltraak ("tambahkan blank line di atas line 'Gross
   // Profit per Order'") — plain isHeader/exportBlankRow row (no label, no groupToggle, no group —
@@ -1080,7 +1086,7 @@ const OUTRIGHT_ROW_DEFS = [
     cellTitle: (data, ctx) => cmTooltipText(data, ctx) },
   // REVISED 2026-09-15 per Zoltraak ("reflected di Contribution Margin as well"): denominator
   // renamed Rebates -> Claim based on Sell Out, same reason as % Gross Profit's own formula text.
-  { key: "pctContributionMargin", idx: 21, label: "% Contribution Margin", formula: "(Contribution Margin) / (Sales of Goods + Claim based on Sell Out)", fmt: "pct", section: "",
+  { key: "pctContributionMargin", idx: 21, label: "% Contribution Margin", formula: "(Contribution Margin) / (Sales of Goods + Rebates)", fmt: "pct", section: "",
     cellTitle: (data, ctx) => pctCmTooltipText(data, ctx) },
   // Blank divider row added 2026-09-16 per Zoltraak ("tambahkan blank line di atas line ...
   // 'Contribution Margin per Order'") — same mechanism/reasoning as blankBeforeGpPerOrder above.
@@ -1333,14 +1339,16 @@ function computeGrand(rows) {
   // since every row.claim it summed from above is already 0 post-deriveMetrics — zeroed explicitly
   // anyway as a defensive, self-documenting no-op).
   const gClaimBasedOnSellOut = (g.claim10PctCogs || 0) + (g.additionalBudgetPromo || 0) + (g.claimVouchers || 0);
-  g.claim = 0;
+  // REVISED 2026-10-19 per Zoltraak — mirrors deriveMetrics' own revision: Rebates = total of the 3 Claim based on Sell Out
+  // rows, and Gross Profit / % Gross Profit / Contribution Margin / % Contribution Margin read g.claim like the LOreal fork.
+  g.claim = gClaimBasedOnSellOut;
   // % Contribution to SoG — mirrors deriveMetrics' r.claim10PctCogsPctSog/additionalBudgetPromoPctSog/
   // claimVouchersPctSog above (see that comment for rationale).
   g.claim10PctCogsPctSog = g.sales ? ((g.claim10PctCogs || 0) / g.sales) * 100 : 0;
   g.additionalBudgetPromoPctSog = g.sales ? ((g.additionalBudgetPromo || 0) / g.sales) * 100 : 0;
   g.claimVouchersPctSog = g.sales ? ((g.claimVouchers || 0) / g.sales) * 100 : 0;
-  g.gp = g.sales + gClaimBasedOnSellOut + (g.otherRevenue || 0) - g.rbp - (g.surplus || 0) - g.mogtmFee - (g.promoFundFrontMargin || 0) - (g.promoFundBackMargin || 0);
-  g.pctGp = (g.sales + gClaimBasedOnSellOut) ? (g.gp / (g.sales + gClaimBasedOnSellOut)) * 100 : 0;
+  g.gp = g.sales + g.claim + (g.otherRevenue || 0) - g.rbp - (g.surplus || 0) - g.mogtmFee - (g.promoFundFrontMargin || 0) - (g.promoFundBackMargin || 0);
+  g.pctGp = (g.sales + g.claim) ? (g.gp / (g.sales + g.claim)) * 100 : 0;
   // Gross Profit per Order — mirrors deriveMetrics' r.gpPerOrder (see that comment for rationale).
   g.gpPerOrder = g.uniq ? g.gp / g.uniq : 0;
   g.pctDisc = (g.sales + gClaimBasedOnSellOut) ? (gClaimBasedOnSellOut / (g.sales + gClaimBasedOnSellOut)) * 100 : 0;
@@ -1355,7 +1363,7 @@ function computeGrand(rows) {
   // Grand Total's `g` object is accumulated field-by-field (see the comment above).
   g.totalPlatformFee = (g.totalVouchers || 0) + (g.marketplaceFee || 0) + (g.otherMarketplaceFee || 0);
   g.contributionMargin = g.gp - g.totalOpCost;
-  g.pctContributionMargin = (g.sales + gClaimBasedOnSellOut) ? (g.contributionMargin / (g.sales + gClaimBasedOnSellOut)) * 100 : 0;
+  g.pctContributionMargin = (g.sales + g.claim) ? (g.contributionMargin / (g.sales + g.claim)) * 100 : 0;
   // Contribution Margin per Order — mirrors deriveMetrics' r.cmPerOrder.
   g.cmPerOrder = g.uniq ? g.contributionMargin / g.uniq : 0;
   return g;
@@ -1375,11 +1383,14 @@ const TABLE2_LABEL_OVERRIDES = {
 // "Storaflow (KNS)" grand entry, same way the main Grand Total sums every row's overall totals.
 // Only computed/shown while Grand Total's own toggle (state.grandExpand) is set to 'wh' — see
 // toggleGrandExpand and renderTable.
-function computeGrandWarehouses(rows) {
+// `nameFn` (optional) maps a raw warehouse name onto the bucket it is summed into — used by the export's
+// "Per Period per Warehouse" sheet (computeGrandWarehouseGroups below); every other caller passes nothing and gets
+// one bucket per raw warehouse name exactly as before.
+function computeGrandWarehouses(rows, nameFn) {
   const map = {};
   rows.forEach(r => {
     (r.warehouses || []).forEach(w => {
-      const name = w.warehouse || '(No Warehouse)';
+      const name = (nameFn ? nameFn(w.warehouse) : w.warehouse) || '(No Warehouse)';
       if (!map[name]) {
         // otherRevenue/surplus/promoFundFrontMargin/promoFundBackMargin added 2026-08-27 per
         // Zoltraak's per-category breakdown request for Rebates/Other Revenue/COGS/Surplus/MOGTM
@@ -1403,6 +1414,13 @@ function computeGrandWarehouses(rows) {
 
 
       PLATFORM_FEE_SUM_KEYS.forEach(k => { m[k] += w[k] || 0; });
+      if (nameFn) {
+        // A grouped bucket (e.g. "MOGTM") has no single warehouse name to look a rate up by, so its MOGTM Distributor Fee
+        // is summed from each underlying warehouse's own fee (their own per-warehouse rates) instead of being derived from
+        // the bucket's name — deriveMetrics leaves an already-numeric mogtmFee alone.
+        m.mogtmFee = (m.mogtmFee || 0) + warehouseMogtmFee(w);
+        m._mogtmRbp = (m._mogtmRbp || 0) + (warehousePrefix(w.warehouse) === 'mogtm' ? (w.rbp || 0) : 0);
+      }
     });
   });
   const list = Object.keys(map).map(k => map[k]);
@@ -1413,6 +1431,29 @@ function computeGrandWarehouses(rows) {
   list.forEach(r => deriveMetrics(r, state.activeView === 'consignment'));
   list.sort((a, b) => b.sales - a.sales);
   return list;
+}
+
+// Warehouse grouping for the export's "Per Period per Warehouse" sheet — ADDED 2026-10-20 per Zoltraak: warehouses are
+// grouped by the START of their name (case-insensitive): Benoa... -> "KLOG Benoa", Surabaya... -> "KLOG Surabaya",
+// TMS... -> "TMS", BKS... -> "BKS", MOGTM... -> "MOGTM". Any other warehouse keeps its own name. Everything else about
+// the sheet (columns, rows, formulas) is unchanged — the buckets just hold the summed figures of every warehouse in them.
+const EXPORT_WAREHOUSE_GROUPS = [
+  { prefix: 'benoa', label: 'KLOG Benoa' },
+  { prefix: 'surabaya', label: 'KLOG Surabaya' },
+  { prefix: 'tms', label: 'TMS' },
+  { prefix: 'bks', label: 'BKS' },
+  { prefix: 'mogtm', label: 'MOGTM' },
+];
+function exportWarehouseGroupName_(raw) {
+  const s = String(raw || '').trim();
+  const lower = s.toLowerCase();
+  for (let i = 0; i < EXPORT_WAREHOUSE_GROUPS.length; i++) {
+    if (lower.indexOf(EXPORT_WAREHOUSE_GROUPS[i].prefix) === 0) return EXPORT_WAREHOUSE_GROUPS[i].label;
+  }
+  return s;
+}
+function computeGrandWarehouseGroups(rows) {
+  return computeGrandWarehouses(rows, exportWarehouseGroupName_);
 }
 
 // Grand Total broken down by MARKETPLACE — only meaningful on the Consignment tab (that's the only
@@ -2300,7 +2341,7 @@ const EXPORT_DIMENSIONS = [
   },
   {
     sheetName: 'Per Period per Warehouse',
-    getColumns: (rows) => buildPerPeriodEntitySheet_(rows, computeGrandWarehouses, 'warehouse'),
+    getColumns: (rows) => buildPerPeriodEntitySheet_(rows, computeGrandWarehouseGroups, 'warehouse'),
   },
   {
     sheetName: 'Per Period per Marketplace',
@@ -2389,11 +2430,18 @@ const EXPORT_FORMULA_ROWS = {
   // on Sell Out" breakdown rows (Claim 10% COGS + Additional Budget Promo + Claim Vouchers) instead,
   // mirroring deriveMetrics'/computeGrand's claimBasedOnSellOut substitution exactly, so the exported
   // Sheets formulas stay mathematically identical to the live dashboard and never double-count.
-  gp: (col, rowOf) => (rowOf.sales && rowOf.claim10PctCogs && rowOf.additionalBudgetPromo && rowOf.claimVouchers && rowOf.otherRevenue && rowOf.rbp && rowOf.surplus && rowOf.mogtmFee && rowOf.promoFundFrontMargin && rowOf.promoFundBackMargin)
-    ? `=${col}${rowOf.sales}+${col}${rowOf.claim10PctCogs}+${col}${rowOf.additionalBudgetPromo}+${col}${rowOf.claimVouchers}+${col}${rowOf.otherRevenue}-${col}${rowOf.rbp}-${col}${rowOf.surplus}-${col}${rowOf.mogtmFee}-${col}${rowOf.promoFundFrontMargin}-${col}${rowOf.promoFundBackMargin}`
+  // REVISED 2026-10-19 per Zoltraak ("adapt dari L'Oreal"): Gross Profit / % Gross Profit / % Contribution Margin below are the LOreal
+  // fork's formulas again (Sales of Goods + Rebates + ..., denominator Sales of Goods + Rebates), where the Rebates row is now
+  // itself a live formula = the sum of the 3 Claim based on Sell Out rows (see the `claim` entry just below).
+  gp: (col, rowOf) => (rowOf.sales && rowOf.claim && rowOf.otherRevenue && rowOf.rbp && rowOf.surplus && rowOf.mogtmFee && rowOf.promoFundFrontMargin && rowOf.promoFundBackMargin)
+    ? `=${col}${rowOf.sales}+${col}${rowOf.claim}+${col}${rowOf.otherRevenue}-${col}${rowOf.rbp}-${col}${rowOf.surplus}-${col}${rowOf.mogtmFee}-${col}${rowOf.promoFundFrontMargin}-${col}${rowOf.promoFundBackMargin}`
     : null,
-  pctGp: (col, rowOf) => (rowOf.gp && rowOf.sales && rowOf.claim10PctCogs && rowOf.additionalBudgetPromo && rowOf.claimVouchers)
-    ? `=IFERROR(${col}${rowOf.gp}/(${col}${rowOf.sales}+${col}${rowOf.claim10PctCogs}+${col}${rowOf.additionalBudgetPromo}+${col}${rowOf.claimVouchers})*100,0)`
+  // Rebates = Claim 10% COGS + Additional Budget Promo + Claim Vouchers (added 2026-10-19, see the comment above gp).
+  claim: (col, rowOf) => (rowOf.claim10PctCogs && rowOf.additionalBudgetPromo && rowOf.claimVouchers)
+    ? `=${col}${rowOf.claim10PctCogs}+${col}${rowOf.additionalBudgetPromo}+${col}${rowOf.claimVouchers}`
+    : null,
+  pctGp: (col, rowOf) => (rowOf.gp && rowOf.sales && rowOf.claim)
+    ? `=IFERROR(${col}${rowOf.gp}/(${col}${rowOf.sales}+${col}${rowOf.claim})*100,0)`
     : null,
   // Gross Profit per Order — added 2026-09-12 per Zoltraak: Gross Profit ÷ Number of Order, both
   // already live formula/plain-number cells in this same sheet's own Gross Profit / Number of
@@ -2416,8 +2464,8 @@ const EXPORT_FORMULA_ROWS = {
     ? `=${col}${rowOf.pickPack}+${col}${rowOf.rentWarehouse}+${col}${rowOf.consumables}+${col}${rowOf.absorbBySirclo}`
     : null,
   contributionMargin: (col, rowOf) => (rowOf.gp && rowOf.totalOpCost) ? `=${col}${rowOf.gp}-${col}${rowOf.totalOpCost}` : null,
-  pctContributionMargin: (col, rowOf) => (rowOf.contributionMargin && rowOf.sales && rowOf.claim10PctCogs && rowOf.additionalBudgetPromo && rowOf.claimVouchers)
-    ? `=IFERROR(${col}${rowOf.contributionMargin}/(${col}${rowOf.sales}+${col}${rowOf.claim10PctCogs}+${col}${rowOf.additionalBudgetPromo}+${col}${rowOf.claimVouchers})*100,0)`
+  pctContributionMargin: (col, rowOf) => (rowOf.contributionMargin && rowOf.sales && rowOf.claim)
+    ? `=IFERROR(${col}${rowOf.contributionMargin}/(${col}${rowOf.sales}+${col}${rowOf.claim})*100,0)`
     : null,
   // Contribution Margin per Order — added 2026-09-12 per Zoltraak, same shape as gpPerOrder above.
   cmPerOrder: (col, rowOf) => (rowOf.contributionMargin && rowOf.uniq)
@@ -2457,8 +2505,10 @@ const EXPORT_PLAIN_PCT_CONT_EXTRA_KEYS = ['mogtmFee'];
 // the sheet layout automatically. Keys that are absent from a given sheet are simply skipped.
 // Price Claw back due to Drop Price (priceClawbackDropPrice) is deliberately NOT in the base.
 const EXPORT_PCT_OF_BASE_ROW_KEYS = ['absorbBySirclo', 'pickPack', 'consumables', 'rentWarehouse', 'totalOpCost'];
+// REVISED 2026-10-19: 'claim' (Rebates) is REMOVED from this list — Rebates now equals the sum of the 3 Claim based on Sell Out rows
+// listed right below, so keeping both would count those 3 twice. The base value itself is unchanged from before.
 const EXPORT_PCT_BASE_KEYS = [
-  'sales', 'claim',
+  'sales',
   'claim10PctCogs', 'additionalBudgetPromo', 'claimVouchers',
   'claimSTTI', 'claimVisibility', 'claimServiceFee', 'claimMonthlyIncentives', 'claimQuarterlyIncentives',
   'otherRevenue',
@@ -2469,6 +2519,12 @@ const EXPORT_PCT_BASE_LABEL = '% Cont. to Total Revenue';
 // SIRCLO. Every other row in EXPORT_PCT_OF_BASE_ROW_KEYS has its single "% Cont." row switched to the
 // Total Revenue base (label + denominator) instead.
 const EXPORT_PCT_ALSO_SOG_ROW_KEYS = ['absorbBySirclo'];
+// ADDED 2026-10-20 per Zoltraak: a new live-formula line directly under "Total Operational and Fulfillment Cost" —
+// that row divided by the SAME Total Revenue base as every other "% Cont. to Total Revenue" row (EXPORT_PCT_BASE_KEYS),
+// column by column. Written only on the export sheets named here (add 'Per Period per Store' / 'Per Period per
+// Marketplace' to switch it on there too).
+const TOTAL_OPCOST_PCT_SHEETS = ['Per Period per Warehouse'];
+const TOTAL_OPCOST_PCT_LABEL = '% Total Operational and Fulfillment Cost to Total Revenue';
 
 // ROW_DEFS keys that get a per-entity VALUE-ONLY breakdown (Warehouse/Store/Marketplace, matching
 // whichever dimension the current sheet is — same as Sales of Goods/Gross Profit etc. already get)
@@ -2555,6 +2611,13 @@ function buildExportPayload_(rows, opts) {
   // Vouchers — they just repeated the per-entity % rows below in a different unit) are dropped.
   const PCT_SOG_ROW_BY_PARENT = { claim10PctCogs: 'claim10PctCogsPctSog', additionalBudgetPromo: 'additionalBudgetPromoPctSog', claimVouchers: 'claimVouchersPctSog' };
   const PCT_SOG_ROW_KEYS = Object.keys(PCT_SOG_ROW_BY_PARENT).map(k => PCT_SOG_ROW_BY_PARENT[k]);
+  // Blank spacer row between a metric's entity VALUE rows and its per-entity "% Cont. to ..." rows — REMOVED 2026-10-19 per
+  // Zoltraak ("hapus baris blank: 55, 66, 77, 135, 179") for exactly these 5 metrics: Claim 10% COGS / Additional Budget
+  // Promo / Claim Vouchers (their blank row sat right under the "% Contribution to SoG" row) and Gross Profit / Contribution
+  // Margin. Every other metric (Number of Order, Quantity, Sales of Goods, Total Operational and Fulfillment Cost, ...)
+  // keeps its spacer. Read by BOTH the row-number pre-pass and the writing pass, at the Group and Store level, so
+  // rowNumberByKey / every live formula stays exactly in step with the rows actually written.
+  const NO_PCT_SPACER_KEYS = ['claim10PctCogs', 'additionalBudgetPromo', 'claimVouchers', 'gp', 'contributionMargin'];
 
 
 
@@ -2666,6 +2729,7 @@ function buildExportPayload_(rows, opts) {
       if (PCT_SOG_ROW_KEYS.includes(def.key)) return; // placed by its parent's iteration — see PCT_SOG_ROW_BY_PARENT
       rowNumberByKey[def.key] = preSheetRow;
       preSheetRow += 1;
+      if (def.key === 'totalOpCost' && TOTAL_OPCOST_PCT_SHEETS.includes(dim.sheetName)) preSheetRow += 1; // the new "% ... to Total Revenue" line right under it
       const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
       // gpPerOrder/cmPerOrder ADDED 2026-09-15 per Zoltraak ("hapuskan %Cont to SoG yang ada dibawah
       // line gross profit per order") — a per-ORDER dollar figure divided by Sales of Goods (a
@@ -2700,7 +2764,7 @@ function buildExportPayload_(rows, opts) {
         preSheetRow += groupBreakdownEntries.length; // (g1) value rows
         placePctSogPre();
         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow) {
-          preSheetRow += 1; // blank spacer row
+          if (!NO_PCT_SPACER_KEYS.includes(def.key)) preSheetRow += 1; // blank spacer row (not for NO_PCT_SPACER_KEYS)
           preSheetRow += groupBreakdownEntries.length; // (g2) per-entity pct rows
         }
       }
@@ -2716,7 +2780,7 @@ function buildExportPayload_(rows, opts) {
         // (unchanged) AND for the new value-only-breakdown rows (Rebates, Other Revenue, COGS,
         // Surplus, MOGTM Distributor Fee, Promo Fund Front/Back Margin — per Zoltraak, value only).
         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow) {
-          preSheetRow += 1; // blank spacer row
+          if (!NO_PCT_SPACER_KEYS.includes(def.key)) preSheetRow += 1; // blank spacer row (not for NO_PCT_SPACER_KEYS)
           preSheetRow += breakdownEntries.length; // per-entity pct rows
         }
       }
@@ -3456,6 +3520,26 @@ function buildExportPayload_(rows, opts) {
         sheetRow += 1;
       };
       if (!hasRealGroupBreakdown && !hasRealBreakdown) emitPctSogRow();
+      // New line directly under Total Operational and Fulfillment Cost (see TOTAL_OPCOST_PCT_SHEETS): live formula =
+      // this column's Total Operational and Fulfillment Cost / this column's Total Revenue base. Written above the
+      // entity value rows, outside any collapse group, so it is always visible.
+      if (def.key === 'totalOpCost' && TOTAL_OPCOST_PCT_SHEETS.includes(dim.sheetName)) {
+        const opCostRow = rowNumberByKey.totalOpCost;
+        rowLabels.push('   ' + TOTAL_OPCOST_PCT_LABEL);
+        rowFormats.push(EXPORT_NUMBER_FORMAT.pct);
+        rowIsBold.push(false);
+        const opCostPctRaw = columns.map(c => {
+          const base = pctBaseRaw_(c);
+          return base ? (((c.data && c.data.totalOpCost) || 0) / base) * 100 : 0;
+        });
+        values.push(columns.map((c, colIdx) => {
+          const colLetter = columnLetter_(colIdx + 3);
+          const baseExpr = pctBaseExpr_(colLetter);
+          return baseExpr ? `=IFERROR(${colLetter}${opCostRow}/${baseExpr}*100,0)` : opCostPctRaw[colIdx];
+        }));
+        rowHighlights.push(computeHighlightCols_(opCostPctRaw));
+        sheetRow += 1;
+      }
 
       if (hasRealGroupBreakdown) {
         // (g1) Group-level plain breakdown VALUE rows — see (a1) below for the full explanation this
@@ -3528,12 +3612,14 @@ function buildExportPayload_(rows, opts) {
           && pctContDenominatorRow === salesRow && salesGroupValueGroupStart != null;
         const salesGroupEntries = usePerEntitySalesDenom ? built.rowBreakdownGroup('sales') : null;
         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow && pctContDenominatorRow) {
-          rowLabels.push('');
-          rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
-          rowIsBold.push(false);
-          values.push(columns.map(() => ''));
-          rowHighlights.push({ highest: [], lowest: [] });
-          sheetRow += 1;
+          if (!NO_PCT_SPACER_KEYS.includes(def.key)) {
+            rowLabels.push('');
+            rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
+            rowIsBold.push(false);
+            values.push(columns.map(() => ''));
+            rowHighlights.push({ highest: [], lowest: [] });
+            sheetRow += 1;
+          }
 
           const groupPctGroupStart = sheetRow;
           groupBreakdownEntries.forEach((entry, idx) => {
@@ -3645,12 +3731,14 @@ function buildExportPayload_(rows, opts) {
         if (built.showPctOfSales && !isRatioBreakdownRow && !isValueOnlyBreakdownRow && pctContDenominatorRow) {
           // Blank spacer row — deliberately OUTSIDE both row groups (never added to rowGroups), so
           // it always stays visible and visually/functionally separates the two collapse toggles.
-          rowLabels.push('');
-          rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
-          rowIsBold.push(false);
-          values.push(columns.map(() => ''));
-          rowHighlights.push({ highest: [], lowest: [] });
-          sheetRow += 1;
+          if (!NO_PCT_SPACER_KEYS.includes(def.key)) {
+            rowLabels.push('');
+            rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
+            rowIsBold.push(false);
+            values.push(columns.map(() => ''));
+            rowHighlights.push({ highest: [], lowest: [] });
+            sheetRow += 1;
+          }
 
 
 
