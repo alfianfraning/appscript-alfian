@@ -1,0 +1,319 @@
+--- a/betadine/Dashboard.html	2026-10-20 18:11:27.583388899 +0000
++++ b/betadine/Dashboard.html	2026-10-20 18:11:27.589382190 +0000
+@@ -5223,11 +5223,14 @@
+ // "Storaflow (KNS)" grand entry, same way the main Grand Total sums every row's overall totals.
+ // Only computed/shown while Grand Total's own toggle (state.grandExpand) is set to 'wh' — see
+ // toggleGrandExpand and renderTable.
+-function computeGrandWarehouses(rows) {
++// `nameFn` (optional) maps a raw warehouse name onto the bucket it is summed into — used by the export's
++// "Per Period per Warehouse" sheet (computeGrandWarehouseGroups below); every other caller passes nothing and gets
++// one bucket per raw warehouse name exactly as before.
++function computeGrandWarehouses(rows, nameFn) {
+   const map = {};
+   rows.forEach(r => {
+     (r.warehouses || []).forEach(w => {
+-      const name = w.warehouse || '(No Warehouse)';
++      const name = (nameFn ? nameFn(w.warehouse) : w.warehouse) || '(No Warehouse)';
+       if (!map[name]) {
+         // otherRevenue/surplus/promoFundFrontMargin/promoFundBackMargin added 2026-08-27 per
+         // Zoltraak's per-category breakdown request for Rebates/Other Revenue/COGS/Surplus/MOGTM
+@@ -5248,6 +5251,13 @@
+       mergeWhpTotals_(m.rentWarehouseCbmWhpTotals, w.rentWarehouseCbmWhpTotals); // see this field's own comment near pctOfSalesNote_
+ 
+       PLATFORM_FEE_SUM_KEYS.forEach(k => { m[k] += w[k] || 0; });
++      if (nameFn) {
++        // A grouped bucket (e.g. "MOGTM") has no single warehouse name to look a rate up by, so its MOGTM Distributor Fee
++        // is summed from each underlying warehouse's own fee (their own per-warehouse rates) instead of being derived from
++        // the bucket's name — deriveMetrics leaves an already-numeric mogtmFee alone.
++        m.mogtmFee = (m.mogtmFee || 0) + warehouseMogtmFee(w);
++        m._mogtmRbp = (m._mogtmRbp || 0) + (warehousePrefix(w.warehouse) === 'mogtm' ? (w.rbp || 0) : 0);
++      }
+     });
+   });
+   const list = Object.keys(map).map(k => map[k]);
+@@ -5261,6 +5271,25 @@
+ }
+ 
+ 
++// Warehouse grouping for the export's "Per Period per Warehouse" sheet — ADDED 2026-10-20 per Zoltraak: warehouses are
++// grouped by the WORD THEY START WITH (the text before " - " in the warehouse name, case-insensitive):
++// "MOGTM - Betadine Solo (MNS)" -> "MOGTM", "Benoa - ..." -> "KLOG Benoa" and
++// "Surabaya - ..." -> "KLOG Surabaya" (EXPORT_WAREHOUSE_GROUP_LABELS below). A name without " - "
++// ("Unidentified") keeps its own name. Everything else about the sheet (columns, rows, formulas) is unchanged — the buckets
++// just hold the summed figures of every warehouse in them.
++const EXPORT_WAREHOUSE_GROUP_LABELS = { benoa: 'KLOG Benoa', surabaya: 'KLOG Surabaya' };
++function exportWarehouseGroupName_(raw) {
++  const s = String(raw || '').trim();
++  if (!s) return s;
++  const i = s.indexOf(' - ');
++  const lead = (i === -1 ? s : s.slice(0, i)).trim();
++  return EXPORT_WAREHOUSE_GROUP_LABELS[lead.toLowerCase()] || lead;
++}
++function computeGrandWarehouseGroups(rows) {
++  return computeGrandWarehouses(rows, exportWarehouseGroupName_);
++}
++
++
+ // Grand Total broken down by MARKETPLACE — only meaningful on the Consignment tab (that's the only
+ // place rows carry a `.marketplaces` breakdown). Same shape/aggregation as
+ // computeGrandWarehouses, just reading r.marketplaces instead of r.warehouses, so every metric row
+@@ -7580,6 +7609,11 @@
+     columns.push(c);
+     origToNewIdx.push(newStart);
+     const entities = entityLists[origIdx];
++    // A period column with exactly ONE entity gets no entity sub-columns (see the length check just below). Remember which
++    // entity that was, so the per-entity formulas that walk several period columns (entityCellIdx_ in buildExportPayload_:
++    // quarter/half roll-up sums, % Move, % Run Rate) can use that period column's own figure for that entity instead of
++    // treating the period as "entity absent" — which silently dropped e.g. April and May from a "KLOG Benoa" Q2 total.
++    if (entities.length === 1) c.soleEntityLabel = entities[0][labelField];
+     if (entities.length > 1) {
+       entities.forEach(e => columns.push({ label: e[labelField], months: c.months, data: e, isEntityBreakdown: true }));
+       // FIXED 2026-08-31 (third round) per Zoltraak ("please readjust the grouping area at colomn
+@@ -7740,7 +7774,7 @@
+   },
+   {
+     sheetName: 'Per Period per Warehouse',
+-    getColumns: (rows) => buildPerPeriodEntitySheet_(rows, computeGrandWarehouses, 'warehouse'),
++    getColumns: (rows) => buildPerPeriodEntitySheet_(rows, computeGrandWarehouseGroups, 'warehouse'),
+   },
+   {
+     sheetName: 'Per Period per Marketplace',
+@@ -7891,6 +7925,16 @@
+ ];
+ const EXPORT_PCT_BASE_LABEL = '% Cont. to Total Revenue';
+ const EXPORT_PCT_ALSO_SOG_ROW_KEYS = ['absorbBySirclo'];
++// ADDED 2026-10-20 per Zoltraak: a new live-formula line directly under "Total Operational and Fulfillment Cost" —
++// that row divided by the SAME Total Revenue base as every other "% Cont. to Total Revenue" row (EXPORT_PCT_BASE_KEYS),
++// column by column. Written on the export sheets named here; remove a sheet name from the list to switch it off there.
++const TOTAL_OPCOST_PCT_SHEETS = ['Per Period per Store', 'Per Period per Warehouse', 'Per Period per Marketplace'];
++const TOTAL_OPCOST_PCT_LABEL = '% Cont. Total Operational and Fulfillment Cost to Total Revenue';
++// ADDED 2026-10-20 per Zoltraak (export only — deliberately NOT part of METRIC_BREAKDOWN_ROW_KEYS, which also drives the on-screen
++// +W/+S/+M buttons): Average Order Value / Average Basket Size get a per-store / per-warehouse / per-marketplace breakdown under them
++// in the Sheets export. They are ratio rows: live per-entity formulas (Sales of Goods / Number of Order, Quantity / Number of Order)
++// referencing the same entity's own Sales of Goods / Quantity / Number of Order breakdown rows; no blank spacer + "% Cont." block beneath them.
++const EXPORT_RATIO_BREAKDOWN_ROW_KEYS = ['aov', 'abs'];
+ 
+ // ROW_DEFS keys that get a per-entity VALUE-ONLY breakdown (Warehouse/Store/Marketplace, matching
+ // whichever dimension the current sheet is — same as Sales of Goods/Gross Profit etc. already get)
+@@ -8003,6 +8047,7 @@
+     // row per toggle, unlike g5/g6's 3/6-row spans), same single-row group pattern the MOGTM "%
+     // Cont. MOGTM to COGS" row already uses (mogtmCogsRow below).
+     let g9Row = null, g10Row = null;
++    let absBlockLastRow = null; // last sheet row of Average Basket Size's own per-entity block (when it has one)
+ 
+     // Pre-pass — added 2026-08-27 per Zoltraak's Number of Order/Quantity request. The "% Cont. to
+     // SoG" formulas below need Sales of Goods' own sheet row number (`salesRow`), and the comment
+@@ -8021,11 +8066,16 @@
+     // cell exists in the final sheet either way), so this is purely about knowing the RIGHT row
+     // number to reference, not about write order.
+     let preSheetRow = EXPORT_DATA_START_ROW;
++    // First sheet row of each key's entity block (the rows right below its main row — or below the extra "% ... to Total
++    // Revenue" line when that line sits under the key's main row).
++    const entityStartByKey = {};
+     dataRowDefs.forEach(def => {
+       rowNumberByKey[def.key] = preSheetRow;
+       preSheetRow += 1;
+-      const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
+-      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin';
++      if (def.key === 'totalOpCost' && TOTAL_OPCOST_PCT_SHEETS.includes(dim.sheetName)) preSheetRow += 1; // the new "% ... to Total Revenue" line right under it
++      entityStartByKey[def.key] = preSheetRow;
++      const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key) || EXPORT_RATIO_BREAKDOWN_ROW_KEYS.includes(def.key);
++      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin' || EXPORT_RATIO_BREAKDOWN_ROW_KEYS.includes(def.key);
+       const isValueOnlyBreakdownRow = EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
+       const breakdownEntries = (built.rowBreakdown && isBreakdownEligibleRow) ? built.rowBreakdown(def.key) : null;
+       const hasRealBreakdown = !!(breakdownEntries && breakdownEntries.length);
+@@ -8276,15 +8326,24 @@
+     // (not a formula) when there's no comparable previous period at all, OR when this specific
+     // entity had no data in that previous period — same "no earlier data -> 0%" convention
+     // moveFormula_ and runRateFormula_ already use.
++    // Column index holding `entityLabel`'s own figure for the (non-entity) period column `pIdx`: that entity's sub-column
++    // when the period has one; the period column itself when this entity was the period's ONLY entity (no sub-columns were
++    // added — see soleEntityLabel in withEntityColumnBreakdown_); -1 when the entity is absent that period.
++    function entityCellIdx_(pIdx, entityLabel) {
++      if (entityLabel === null) return pIdx;
++      const children = entityChildrenByParent[pIdx];
++      const eIdx = children ? children[entityLabel] : undefined;
++      if (eIdx !== undefined) return eIdx;
++      return columns[pIdx] && columns[pIdx].soleEntityLabel === entityLabel ? pIdx : -1;
++    }
+     function moveFormulaGeneric_(curIdx, metricRow) {
+       const parentIdx = parentColIdx_(curIdx);
+       const prevParentIdx = prevParentIdx_(parentIdx);
+       if (prevParentIdx < 0) return 0;
+       let prevIdx;
+       if (columns[curIdx].isEntityBreakdown) {
+-        const children = entityChildrenByParent[prevParentIdx];
+-        prevIdx = children ? children[columns[curIdx].label] : undefined;
+-        if (prevIdx === undefined) return 0;
++        prevIdx = entityCellIdx_(prevParentIdx, columns[curIdx].label);
++        if (prevIdx < 0) return 0;
+       } else {
+         prevIdx = prevParentIdx;
+       }
+@@ -8304,9 +8363,8 @@
+       const curVal = (columns[curIdx].data && columns[curIdx].data[metricKey]) || 0;
+       let prevVal;
+       if (columns[curIdx].isEntityBreakdown) {
+-        const children = entityChildrenByParent[prevParentIdx];
+-        const prevIdx = children ? children[columns[curIdx].label] : undefined;
+-        if (prevIdx === undefined) return 0;
++        const prevIdx = entityCellIdx_(prevParentIdx, columns[curIdx].label);
++        if (prevIdx < 0) return 0;
+         prevVal = (columns[prevIdx].data && columns[prevIdx].data[metricKey]) || 0;
+       } else {
+         prevVal = (columns[prevParentIdx].data && columns[prevParentIdx].data[metricKey]) || 0;
+@@ -8388,13 +8446,8 @@
+     function sumCellsExpr_(parentIdxs, metricRow, entityLabel) {
+       const parts = [];
+       parentIdxs.forEach(pIdx => {
+-        let cellIdx = pIdx;
+-        if (entityLabel !== null) {
+-          const children = entityChildrenByParent[pIdx];
+-          const eIdx = children ? children[entityLabel] : undefined;
+-          if (eIdx === undefined) return;
+-          cellIdx = eIdx;
+-        }
++        const cellIdx = entityCellIdx_(pIdx, entityLabel);
++        if (cellIdx < 0) return;
+         parts.push(colLetters[cellIdx] + metricRow);
+       });
+       return parts.length ? parts.join('+') : '0';
+@@ -8426,13 +8479,9 @@
+       const entityLabel = c.isEntityBreakdown ? c.label : null;
+       let qtdSales = 0;
+       monthIdxs.forEach(pIdx => {
+-        let dataCol = columns[pIdx];
+-        if (entityLabel !== null) {
+-          const children = entityChildrenByParent[pIdx];
+-          const eIdx = children ? children[entityLabel] : undefined;
+-          if (eIdx === undefined) return;
+-          dataCol = columns[eIdx];
+-        }
++        const cellIdx = entityCellIdx_(pIdx, entityLabel);
++        if (cellIdx < 0) return;
++        const dataCol = columns[cellIdx];
+         qtdSales += (dataCol.data && dataCol.data.sales) || 0;
+       });
+       const curVal = (c.data && c.data.sales) || 0;
+@@ -8468,13 +8517,9 @@
+       const entityLabel = c.isEntityBreakdown ? c.label : null;
+       let prevSales = 0;
+       monthIdxs.forEach(pIdx => {
+-        let dataCol = columns[pIdx];
+-        if (entityLabel !== null) {
+-          const children = entityChildrenByParent[pIdx];
+-          const eIdx = children ? children[entityLabel] : undefined;
+-          if (eIdx === undefined) return;
+-          dataCol = columns[eIdx];
+-        }
++        const cellIdx = entityCellIdx_(pIdx, entityLabel);
++        if (cellIdx < 0) return;
++        const dataCol = columns[cellIdx];
+         prevSales += (dataCol.data && dataCol.data.sales) || 0;
+       });
+       const curVal = (c.data && c.data.sales) || 0;
+@@ -8643,14 +8688,25 @@
+       // earlier in ROW_DEFS than every row that needs it — Number of Order/Quantity (keys
+       // 'uniq'/'qty') sit before it — so `rowNumberByKey['sales']` is guaranteed populated here
+       // only because of the pre-pass above, which computes every key's row number up front.
+-      const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
+-      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin';
++      const isBreakdownEligibleRow = METRIC_BREAKDOWN_ROW_KEYS.includes(def.key) || EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key) || EXPORT_RATIO_BREAKDOWN_ROW_KEYS.includes(def.key);
++      const isRatioBreakdownRow = def.key === 'pctGp' || def.key === 'pctContributionMargin' || EXPORT_RATIO_BREAKDOWN_ROW_KEYS.includes(def.key);
+       // Value-only-breakdown rows (Rebates, Other Revenue, COGS, Surplus, MOGTM Distributor Fee,
+       // Promo Fund Front/Back Margin — added 2026-08-27 per Zoltraak) — see
+       // EXPORT_VALUE_ONLY_BREAKDOWN_KEYS' own comment for why these get breakdown VALUE rows (a1)
+       // but never the per-entity "% Cont. to ..." rows (a2).
+       const isValueOnlyBreakdownRow = EXPORT_VALUE_ONLY_BREAKDOWN_KEYS.includes(def.key);
+-      const breakdownEntries = (built.rowBreakdown && isBreakdownEligibleRow) ? built.rowBreakdown(def.key) : null;
++      let breakdownEntries = (built.rowBreakdown && isBreakdownEligibleRow) ? built.rowBreakdown(def.key) : null;
++      // Average Basket Size = Quantity / Number of Order in the export (not the dashboard's Sales of Goods / Quantity), so
++      // its per-entity plain figures (only used for highlighting / as the no-formula fallback) are rebuilt from the
++      // entity's own Quantity and Number of Order.
++      if (def.key === 'abs' && breakdownEntries && breakdownEntries.length) {
++        const qtyEntries = built.rowBreakdown('qty'), uniqEntries = built.rowBreakdown('uniq');
++        breakdownEntries = breakdownEntries.map(e => {
++          const q = (qtyEntries.find(x => x.label === e.label) || { values: [] }).values;
++          const u = (uniqEntries.find(x => x.label === e.label) || { values: [] }).values;
++          return { label: e.label, values: e.values.map((v, i) => (v === null ? null : (u[i] ? (q[i] || 0) / u[i] : 0))) };
++        });
++      }
+       const hasRealBreakdown = !!(breakdownEntries && breakdownEntries.length);
+       const salesRow = rowNumberByKey.sales;
+       // "% Cont. to SoG" vs "% Cont. to GP" vs "% Cont. to CM" vs "% Cont. to NoD" vs "% Cont. to
+@@ -8691,15 +8747,36 @@
+         ? { noteKey: def.cellNote.pctOfSalesKey, useAbs: def.cellNote.pctOfSalesUseAbs }
+         : (EXPORT_PLAIN_PCT_CONT_EXTRA_KEYS.includes(def.key) ? { noteKey: def.key, useAbs: false } : null);
+ 
++      // New line directly under Total Operational and Fulfillment Cost (see TOTAL_OPCOST_PCT_SHEETS): live formula =
++      // this column's Total Operational and Fulfillment Cost / this column's Total Revenue base. Written above the
++      // entity value rows, outside any collapse group, so it is always visible.
++      if (def.key === 'totalOpCost' && TOTAL_OPCOST_PCT_SHEETS.includes(dim.sheetName)) {
++        const opCostRow = rowNumberByKey.totalOpCost;
++        rowLabels.push('   ' + TOTAL_OPCOST_PCT_LABEL);
++        rowFormats.push(EXPORT_NUMBER_FORMAT.pct);
++        rowIsBold.push(false);
++        const opCostPctRaw = columns.map(c => {
++          const base = pctBaseRaw_(c);
++          return base ? (((c.data && c.data.totalOpCost) || 0) / base) * 100 : 0;
++        });
++        values.push(columns.map((c, colIdx) => {
++          const colLetter = columnLetter_(colIdx + 3);
++          const baseExpr = pctBaseExpr_(colLetter);
++          return baseExpr ? `=IFERROR(${colLetter}${opCostRow}/${baseExpr}*100,0)` : opCostPctRaw[colIdx];
++        }));
++        rowHighlights.push(computeHighlightCols_(opCostPctRaw));
++        sheetRow += 1;
++      }
++
+       if (hasRealBreakdown) {
+         // (a1) Plain breakdown VALUE rows first — unchanged from before this revision, and now also
+         // covers the new value-only-breakdown rows. Sorted biggest-contribution-first (already done
+         // by computeExportEntityBreakdown_/computeExportStoreBreakdown_). Plain numbers only — never
+         // a live formula, matching the dashboard's own breakdown rows (also always plain values).
+         const valueGroupStart = sheetRow;
+-        breakdownEntries.forEach(entry => {
++        breakdownEntries.forEach((entry, entIdx) => {
+           rowLabels.push('   ' + entry.label); // indented — a plain "this is a sub-row" cue.
+-          rowFormats.push(EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0');
++          rowFormats.push(def.key === 'abs' ? EXPORT_NUMBER_FORMAT.decimal : (EXPORT_NUMBER_FORMAT[def.fmt] || '#,##0')); // Average Basket Size keeps its 2 decimals
+           rowIsBold.push(false);
+           // entry.values was built against `built.rowBreakdown`'s OWN (pre-entity-column-breakdown)
+           // period-column list — remap each value onto its new position via origToNewIdx (see that
+@@ -8716,11 +8793,26 @@
+             remapped[newIdx] = v === null ? 0 : v;
+             if (v !== null) highlightArr[newIdx] = v;
+           });
++          // Average Order Value / Average Basket Size: live per-entity formula over THIS entity's own Sales of Goods /
++          // Quantity / Number of Order breakdown rows (entity #entIdx sits at the same position in every key's block, since
++          // every block is sorted by Sales of Goods). The plain numbers above stay only as the highlight twin / fallback.
++          if (EXPORT_RATIO_BREAKDOWN_ROW_KEYS.includes(def.key)) {
++            const makeFormula = EXPORT_FORMULA_ROWS[def.key];
++            const rowOfSameEntity = {};
++            (def.key === 'aov' ? ['sales', 'uniq'] : ['qty', 'uniq']).forEach(k => {
++              if (entityStartByKey[k] != null) rowOfSameEntity[k] = entityStartByKey[k] + entIdx;
++            });
++            columns.forEach((c, colIdx) => {
++              const f = makeFormula ? makeFormula(columnLetter_(colIdx + 3), rowOfSameEntity) : null;
++              if (f) remapped[colIdx] = f;
++            });
++          }
+           values.push(remapped);
+           rowHighlights.push(computeHighlightCols_(highlightArr));
+           sheetRow += 1;
+         });
+         rowGroups.push({ start: valueGroupStart, end: sheetRow - 1 });
++        if (def.key === 'abs') absBlockLastRow = sheetRow - 1;
+ 
+         // (a2) One "% Cont. to SoG/GP/CM <entity>" row per entity, in the SAME order, right after a
+         // blank spacer row — skipped for the two ratio rows (a store's own % Gross Profit or %
+@@ -8877,7 +8969,8 @@
+     // Average Basket Size all sit consecutively at the very top of every sheet — see OUTRIGHT_
+     // ROW_DEFS' idx 1-4), independent of g1's own dashboard-only show/hide behavior.
+     if (rowNumberByKey.uniq != null && rowNumberByKey.abs != null) {
+-      rowGroups.push({ start: rowNumberByKey.uniq, end: rowNumberByKey.abs });
++      // The master group now also covers Average Basket Size's own per-entity rows when it has them.
++      rowGroups.push({ start: rowNumberByKey.uniq, end: Math.max(rowNumberByKey.abs, absBlockLastRow || 0) });
+     }
+ 
+     dataRowDefs.forEach(def => {
