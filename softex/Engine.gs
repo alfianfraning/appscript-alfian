@@ -1322,8 +1322,8 @@ function computeGrandWarehouses(rows, nameFn) {
 
 // Warehouse grouping for the export's "Per Period per Warehouse" sheet — ADDED 2026-10-20 per Zoltraak: warehouses are
 // grouped by the WORD THEY START WITH (the text before " - " in the warehouse name, case-insensitive):
-// "CAS - Softex (KNS)" -> "CAS", "Kintetsu - Softex (KNS)" -> "Kintetsu", "SMC - Softex Surabaya (KNS)" -> "SMC",
-// "Benoa - Softex (KNS)" / "Benoa - Sweety O2O (KNS)" -> "KLOG Benoa" (Benoa and Surabaya are shown under their KLOG
+// "CAS - Softex (KNS)" -> "CAS", "Kintetsu - Softex (KNS)" -> "Kintetsu", "SMC - Softex Surabaya (KNS)" -> "SMC Surabaya" (SMC is split by the city in the name — "...Tangerang..." -> "SMC Tangerang",
+// revised 2026-10-21 per Zoltraak), "Benoa - Softex (KNS)" / "Benoa - Sweety O2O (KNS)" -> "KLOG Benoa" (Benoa and Surabaya are shown under their KLOG
 // names — EXPORT_WAREHOUSE_GROUP_LABELS below). A name without " - " keeps its own name. Everything else about the
 // sheet (columns, rows, formulas) is unchanged — the buckets just hold the summed figures of every warehouse in them.
 const EXPORT_WAREHOUSE_GROUP_LABELS = { benoa: 'KLOG Benoa', surabaya: 'KLOG Surabaya' };
@@ -1332,6 +1332,11 @@ function exportWarehouseGroupName_(raw) {
   if (!s) return s;
   const i = s.indexOf(' - ');
   const lead = (i === -1 ? s : s.slice(0, i)).trim();
+  if (lead.toLowerCase() === 'smc') {
+    const lower = s.toLowerCase();
+    if (lower.indexOf('tangerang') !== -1) return 'SMC Tangerang';
+    if (lower.indexOf('surabaya') !== -1) return 'SMC Surabaya';
+  }
   return EXPORT_WAREHOUSE_GROUP_LABELS[lead.toLowerCase()] || lead;
 }
 function computeGrandWarehouseGroups(rows) {

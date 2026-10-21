@@ -5591,7 +5591,7 @@ function computeGrandMarketplaces(rows) {
 
 // Warehouse grouping for the export's "Per Period per Warehouse" sheet — ADDED 2026-10-20 per Zoltraak: warehouses are
 // grouped by the WORD THEY START WITH (the text before " - " in the warehouse name, case-insensitive):
-// "SMC - S26 Surabaya (KNS)" -> "SMC", "Storaflow - Purina (KNS)" -> "Storaflow", "Kintetsu - Purina (KNS)" -> "Kintetsu",
+// "SMC - S26 Surabaya (KNS)" -> "SMC Surabaya" (SMC is split by the city in the name — "...Tangerang..." -> "SMC Tangerang", revised 2026-10-21 per Zoltraak), "Storaflow - Purina (KNS)" -> "Storaflow", "Kintetsu - Purina (KNS)" -> "Kintetsu",
 // "MOGTM - Nestle Semarang (KNS)" / "MOGTM - Purina Medan (KNS)" ... -> "MOGTM", "Benoa - Dancow (KNS)" / "Benoa - Nestle (KNS)" ...
 // -> "KLOG Benoa" and "Surabaya - Purina (KNS)" -> "KLOG Surabaya" (EXPORT_WAREHOUSE_GROUP_LABELS below). A name without
 // " - " ("Unidentify", "WH Unidentified") keeps its own name. Everything else about the sheet (columns, rows, formulas) is
@@ -5603,6 +5603,11 @@ function exportWarehouseGroupName_(raw) {
   if (!s) return s;
   const i = s.indexOf(' - ');
   const lead = (i === -1 ? s : s.slice(0, i)).trim();
+  if (lead.toLowerCase() === 'smc') {
+    const lower = s.toLowerCase();
+    if (lower.indexOf('tangerang') !== -1) return 'SMC Tangerang';
+    if (lower.indexOf('surabaya') !== -1) return 'SMC Surabaya';
+  }
   return EXPORT_WAREHOUSE_GROUP_LABELS[lead.toLowerCase()] || lead;
 }
 function computeGrandWarehouseGroups(rows) {

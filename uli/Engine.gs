@@ -1438,7 +1438,9 @@ function computeGrandWarehouses(rows, nameFn) {
 // Warehouse grouping for the export's "Per Period per Warehouse" sheet — ADDED 2026-10-20 per Zoltraak: warehouses are
 // grouped by the START of their name (case-insensitive): Benoa... -> "KLOG Benoa", Surabaya... -> "KLOG Surabaya",
 // TMS... -> "TMS", BKS... -> "BKS", MOGTM... -> "MOGTM", SMC... -> "SMC", Storaflow... -> "Storaflow" (the last two added
-// 2026-10-21 per Zoltraak). Any other warehouse keeps its own name. Everything else about
+// 2026-10-21 per Zoltraak). SMC is then split by the city in the warehouse name (revised 2026-10-21 per Zoltraak): "SMC - ...
+// Tangerang ..." -> "SMC Tangerang", "SMC - ... Surabaya ..." -> "SMC Surabaya" (a name with neither city stays "SMC").
+// Any other warehouse keeps its own name. Everything else about
 // the sheet (columns, rows, formulas) is unchanged — the buckets just hold the summed figures of every warehouse in them.
 const EXPORT_WAREHOUSE_GROUPS = [
   { prefix: 'benoa', label: 'KLOG Benoa' },
@@ -1452,6 +1454,10 @@ const EXPORT_WAREHOUSE_GROUPS = [
 function exportWarehouseGroupName_(raw) {
   const s = String(raw || '').trim();
   const lower = s.toLowerCase();
+  if (lower.indexOf('smc') === 0) {
+    if (lower.indexOf('tangerang') !== -1) return 'SMC Tangerang';
+    if (lower.indexOf('surabaya') !== -1) return 'SMC Surabaya';
+  }
   for (let i = 0; i < EXPORT_WAREHOUSE_GROUPS.length; i++) {
     if (lower.indexOf(EXPORT_WAREHOUSE_GROUPS[i].prefix) === 0) return EXPORT_WAREHOUSE_GROUPS[i].label;
   }
