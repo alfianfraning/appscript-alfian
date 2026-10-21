@@ -5625,18 +5625,27 @@ function computeGrandWarehouseGroups(rows) {
 const WAREHOUSE_GROUP_RULES_ = [
   { label: 'KLOG',     prefixes: ['benoa', 'surabaya'] },
   { label: 'Biteship', prefixes: ['biteship'] },
-  { label: 'SMC',      prefixes: ['smc'] },
+  { label: 'SMC',      prefixes: ['smc'], splitByCity: true }, // SMC Tangerang / SMC Surabaya (split by city 2026-10-21 per Zoltraak)
   { label: 'MOGTM',    prefixes: ['mogtm'] },
 ];
 // Cocok jika prefix (teks sebelum " - ") sama persis dengan salah satu prefix aturan, ATAU diawali
 // prefix itu + spasi — jadi "SMC - Tangerang (KNS)", "SMC Tangerang", dan "SMC Surabaya (KNS)" semuanya
-// masuk "SMC" apa pun format penulisan namanya di file Data Claim.
+// dikenali sebagai SMC apa pun format penulisan namanya di file Data Claim; khusus SMC (splitByCity) hasilnya
+// dipecah per kota: "SMC Tangerang" / "SMC Surabaya".
 function warehouseGroupLabel_(name) {
   const p = warehousePrefix(name);
   for (let i = 0; i < WAREHOUSE_GROUP_RULES_.length; i++) {
     const pf = WAREHOUSE_GROUP_RULES_[i].prefixes;
     for (let j = 0; j < pf.length; j++) {
-      if (p === pf[j] || p.indexOf(pf[j] + ' ') === 0) return WAREHOUSE_GROUP_RULES_[i].label;
+      if (p === pf[j] || p.indexOf(pf[j] + ' ') === 0) {
+        if (WAREHOUSE_GROUP_RULES_[i].splitByCity) {
+          // "SMC - Tangerang (KNS)" -> "SMC Tangerang", "SMC Surabaya (KNS)" -> "SMC Surabaya"; no city in the name -> plain "SMC"
+          const lower = String(name || '').toLowerCase();
+          if (lower.indexOf('tangerang') !== -1) return WAREHOUSE_GROUP_RULES_[i].label + ' Tangerang';
+          if (lower.indexOf('surabaya') !== -1) return WAREHOUSE_GROUP_RULES_[i].label + ' Surabaya';
+        }
+        return WAREHOUSE_GROUP_RULES_[i].label;
+      }
     }
   }
   return name || '(No Warehouse)';
