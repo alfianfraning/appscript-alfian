@@ -1,0 +1,14 @@
+--- a/Code.gs	2026-10-21 01:42:05.252945777 +0000
++++ b/Code.gs	2026-10-21 01:42:05.245151483 +0000
+@@ -722,6 +722,11 @@
+   'storaflow': 'Storaflow',
+   'tms': 'TMS',
+   'lazada': 'MCL',
++  // "Kintetsu - <brand> (KNS)" — Kintetsu (KLI in Master Data Warehouse / the CTS Rent Warehouse sheet). Added 2026-10-21 per
++  // Zoltraak: the Warehouse Breakdown "Calculation" tab lists it as "Kintetsu" (Pick Pack / Consumables / Rent Warehouse rows),
++  // and without this entry Pick Pack and Consumables were $0 ("Unrecognized warehouse code" warning) because only Rent
++  // Warehouse is resolved via Master Data Warehouse (-> KLI), not via this map.
++  'kintetsu': 'Kintetsu',
+   'mogtm': null,
+   // "JIT - Rip Curl Bali (KNS)" — Rip Curl's other warehouse code, confirmed by Zoltraak
+   // 2026-08-18: bills under PT Koneksi Niaga Solusindo (the default, no BRAND_ENTITY_OVERRIDES
