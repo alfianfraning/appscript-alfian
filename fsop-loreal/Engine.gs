@@ -1273,7 +1273,8 @@ function computeGrandWarehouses(rows, nameFn) {
 
 // Warehouse grouping for the export's "Per Period per Warehouse" sheet — ADDED 2026-10-20 per Zoltraak: warehouses are
 // grouped by the START of their name (case-insensitive): Benoa... -> "KLOG Benoa", Surabaya... -> "KLOG Surabaya",
-// TMS... -> "TMS", BKS... -> "BKS", MOGTM... -> "MOGTM". Any other warehouse keeps its own name. Everything else about
+// TMS... -> "TMS", BKS... -> "BKS", MOGTM... -> "MOGTM", Lazada... -> "Lazada", Kintetsu... -> "Kintetsu" (the last two added
+// 2026-10-21 per Zoltraak). Any other warehouse keeps its own name. Everything else about
 // the sheet (columns, rows, formulas) is unchanged — the buckets just hold the summed figures of every warehouse in them.
 const EXPORT_WAREHOUSE_GROUPS = [
   { prefix: 'benoa', label: 'KLOG Benoa' },
@@ -1281,6 +1282,8 @@ const EXPORT_WAREHOUSE_GROUPS = [
   { prefix: 'tms', label: 'TMS' },
   { prefix: 'bks', label: 'BKS' },
   { prefix: 'mogtm', label: 'MOGTM' },
+  { prefix: 'lazada', label: 'Lazada' },
+  { prefix: 'kintetsu', label: 'Kintetsu' },
 ];
 function exportWarehouseGroupName_(raw) {
   const s = String(raw || '').trim();
